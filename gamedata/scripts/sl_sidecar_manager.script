@@ -82,7 +82,16 @@ function prune_deleted()
     for id in pairs(records) do
         local found,object=pcall(function() return simulator:object(id) end)
         if not found then problem('ALife lookup failed');return false end
-        if not object then stale[#stale+1]=id end
+        if not object then
+            stale[#stale+1]=id
+        else
+            -- Проверяем повторно использованный ID по имени и секции.
+            local matches,identical=pcall(function()
+                return object:name()==records[id].name and object:section_name()==records[id].section
+            end)
+            if not matches then problem('ALife identity lookup failed');return false end
+            if not identical then stale[#stale+1]=id end
+        end
     end
     for _,id in ipairs(stale) do records[id]=nil end
     return true,#stale

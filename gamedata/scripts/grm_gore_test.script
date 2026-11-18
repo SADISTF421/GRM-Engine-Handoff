@@ -188,7 +188,7 @@ local function schedule_hide(binder)
     if binder.grm_gore_pending or binder.grm_gore_anchored then return end
     local obj = binder.object
     binder.grm_gore_pending = {
-        id = obj:id(), name = obj:name(), map = level.name(), started = time_global()
+        id = obj:id(), name = obj:name(), section = obj:section(), map = level.name(), started = time_global()
     }
 end
 function hit(binder, amount, who, bone)
@@ -297,8 +297,14 @@ function update(binder)
         elseif now - pending.started >= 50 then
             binder.grm_gore_pending = nil
             local ok, result = pcall(function()
+                -- Клиентский объект ищем только после проверки реестра и online-статуса.
+                local simulator = alife()
+                if not simulator then return nil end
+                local server = simulator:object(pending.id)
+                if not server or server.online ~= true then return nil end
+                if server:name() ~= pending.name or server:section_name() ~= pending.section then return nil end
                 local corpse = level.object_by_id(pending.id)
-                if not corpse or corpse:name() ~= pending.name or corpse:alive() then return nil end
+                if not corpse or corpse:name() ~= pending.name or corpse:section() ~= pending.section or corpse:alive() then return nil end
                 return corpse:bone_position("__grm_test_hide_head__").x
             end)
             if ok and result == 1 then

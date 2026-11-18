@@ -1,0 +1,6 @@
+PASS: guard rejects overflow without writing; read rejects truncation
+PASS: harvest target deleted/offline/reused cancels safely on mocks; valid corpse released once
+PASS: actor knife skips shiza gore bone handler; other callbacks and shotgun preserved
+PASS: deleted/offline/reused NPC not looked up as client, online matching NPC still executes hide on mocks
+PASS: knife avoids gore bone query, pending reset preserves blood/anchor, TOZ hit retained
+Syntax checked

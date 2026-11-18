@@ -1,0 +1,18 @@
+--- bind_stalker.script_V2
++++ bind_stalker__V2.script
+@@ -63,6 +63,7 @@
+ end
+  
+ function actor_binder:net_destroy()
++    pcall(function() sl_sidecar_manager.reset() end)
+     pcall(function() grm_eyes_open.reset() end)
+     pcall(function() grm_night_pp.reset() end)
+     pcall(function() grm_walk_cam.reset() end)
+@@ -110,6 +111,7 @@
+ end
+  
+ function actor_binder:reinit()
++    pcall(function() sl_sidecar_manager.reset() end)
+     pcall(function() grm_eyes_open.reinit() end)
+     pcall(function() grm_night_pp.reset() end)
+     pcall(function() grm_walk_cam.reset() end)

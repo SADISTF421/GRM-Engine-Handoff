@@ -1,0 +1,18 @@
+--- /data/grm/current2026/scripts.rar/scripts/shiza_reznya.script
++++ /data/grm_transfer_stage/02_versions/user_latest_scripts/scripts/shiza_reznya.script
+@@ -104,6 +104,7 @@
+ 	level.add_pp_effector(FADE_EFFECT, 1488, false)
+ 	obj:iterate_inventory(need_drop, obj)
+     sl_rotting.forget(obj)
++    pcall(function() sl_sidecar_manager.forget(obj:id()) end)
+ 	alife():release(alife():object(obj:id()), true)
+ 	
+ 	for k, v in pairs(spawn_items) do
+@@ -239,6 +240,7 @@
+ 			db.actor:eat(db.actor:object(SECTION_OBJ_TO_EAT))
+ 			
+ 			-- Убираем тело
++			pcall(function() sl_sidecar_manager.forget(obj:id()) end)
+ 			alife():release(alife():object(obj:id()), true)
+ 		end
+ 	)

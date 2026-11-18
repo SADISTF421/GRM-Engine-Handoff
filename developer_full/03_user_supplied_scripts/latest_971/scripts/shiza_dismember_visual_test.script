@@ -1,0 +1,36 @@
+local started = false
+
+local function tip(text)
+    if not db.actor then return end
+    pcall(function()
+        db.actor:give_game_news(text, "ui\\ui_iconsTotal", Frect():set(83,470,83,47), 0, 7000)
+    end)
+end
+
+function schedule(obj)
+    if started or not obj or not db.actor then return end
+    started = true
+    local ok, id = pcall(function() return obj:id() end)
+    if not ok or not id then tip("GORE TEST: no NPC ID") return end
+    local at = time_global() + 500
+    level.add_call(
+        function() return time_global() >= at end,
+        function()
+            local npc = level.object_by_id(id)
+            if not npc then tip("GORE TEST: corpse not found") return end
+            local alive_ok, alive = pcall(function() return npc:alive() end)
+            if not alive_ok or alive then tip("GORE TEST: NPC is not dead") return end
+            local hidden = pcall(function() npc:set_visual_hidden(true) end)
+            if not hidden then tip("GORE TEST: hide unavailable") return end
+            tip("GORE TEST: hiding corpse for 4 seconds")
+            local restore_at = time_global() + 4000
+            level.add_call(
+                function() return time_global() >= restore_at end,
+                function()
+                    local corpse = level.object_by_id(id)
+                    if not corpse then tip("GORE TEST: corpse missing") return end
+                    local restored = pcall(function() corpse:set_visual_hidden(false) end)
+                    if restored then tip("GORE TEST: corpse restored") else tip("GORE TEST: restore failed") end
+                end)
+        end)
+end

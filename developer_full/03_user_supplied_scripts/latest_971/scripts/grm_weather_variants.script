@@ -1,0 +1,30 @@
+-- Небольшое разнообразие погоды без изменения случайного генератора игры.
+local last_check = nil
+local profiles = {
+    l07_military = { base = "f42_military_storm", variant = "grm_military_dynamic", salt = 17 },
+    l02_garbage = { base = "f42_garbage", variant = "grm_garbage_dynamic", salt = 61 }
+}
+
+local function variant_today(p)
+    local y, m, d, h, minute, sec, ms = 0, 0, 0, 0, 0, 0, 0
+    y, m, d, h, minute, sec, ms = game.get_game_time():get(y, m, d, h, minute, sec, ms)
+    if not y or not m or not d then return false end
+    local n = (y * 372 + m * 31 + d + p.salt) % 65521
+    return (n * n * 73 + n * 19 + 23) % 101 < 47
+end
+
+function update()
+    local now = time_global()
+    if last_check and now >= last_check and now - last_check < 3000 then return end
+    last_check = now
+    if not db.actor or not db.actor:alive() then return end
+    local p = profiles[string.lower(level.name())]
+    if not p then return end
+    -- Сюжетные погодные эффекты и чужие циклы не переключаем.
+    if level.is_wfx_playing and level.is_wfx_playing() then return end
+    local current = level.get_weather()
+    if current ~= p.base and current ~= p.variant then return end
+    local desired = p.base
+    if variant_today(p) then desired = p.variant end
+    if current ~= desired then level.set_weather(desired, false) end
+end

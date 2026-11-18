@@ -1,0 +1,142 @@
+-- Weapon camera effects based on active-item changes, not engine animation events.
+local DRAW_ID, HIDE_ID = 28748, 28749
+local paths = {
+    ["wpn_abakan"]="owa_94_draw",
+    ["wpn_ak74"]="ak74_draw",
+    ["wpn_ak74u"]="owa_ak74u_draw",
+    ["wpn_akm74"]="ak74_draw",
+    ["wpn_akms"]="ak74_draw",
+    ["wpn_aks74"]="ak74_draw",
+    ["wpn_aps_sk1"]="owa_92_draw",
+    ["wpn_beretta"]="owa_92_draw",
+    ["wpn_bm16"]="owa_tozs_draw",
+    ["wpn_colt1911"]="owa_cult_draw",
+    ["wpn_desert_eagle"]="owa_desert_eagle_draw",
+    ["wpn_fn2000"]="owa_fn_draw_gl_off",
+    ["wpn_fort"]="owa_92_draw",
+    ["wpn_g36"]="g36_draw",
+    ["wpn_gauss"]="owa_gauz_draw",
+    ["wpn_gm94"]="rg6_hand_draw",
+    ["wpn_groza"]="oc_gloff_draw",
+    ["wpn_groza_old"]="oc_gloff_draw",
+    ["wpn_gsh18"]="owa_hsa_draw",
+    ["wpn_hpsa"]="owa_hsa_draw",
+    ["wpn_hpsa_old"]="owa_hsa_draw",
+    ["wpn_igla"]="owa_rpg7_draw",
+    ["wpn_l85"]="owa_l85_draw",
+    ["wpn_lr300"]="m4_draw",
+    ["wpn_m134"]="ak74_draw",
+    ["wpn_mp5"]="mp5_draw",
+    ["wpn_p90"]="mp5_draw",
+    ["wpn_pb"]="owa_92_draw",
+    ["wpn_pkm"]="ak74_draw",
+    ["wpn_pm"]="owa_92_draw",
+    ["wpn_striker"]="spas12_draw",
+    ["wpn_protecta"]="spas12_draw",
+    ["wpn_rg-6"]="rg6_hand_draw",
+    ["wpn_rpg7"]="owa_rpg7_draw",
+    ["wpn_rpk74"]="ak74_draw",
+    ["wpn_sig220"]="owa_ups_draw",
+    ["wpn_sig550"]="owa_sick_draw",
+    ["wpn_spas12"]="spas12_draw",
+    ["wpn_svd"]="owa_hand_svd_draw",
+    ["wpn_svu"]="owa_handsvu_draw",
+    ["wpn_toz34"]="owa_tozs_draw",
+    ["wpn_usp"]="owa_ups_draw",
+    ["wpn_val"]="vss_draw",
+    ["wpn_vintorez"]="vss_draw",
+    ["wpn_vsk94"]="vss_draw",
+    ["wpn_walther"]="owa_wulter_draw",
+    ["wpn_wincheaster1300"]="owa_winchester_draw",
+}
+paths["wpn_abakan_m1"]=paths["wpn_abakan"]
+paths["wpn_abakan_m2"]=paths["wpn_abakan"]
+paths["wpn_ak74_arena"]=paths["wpn_ak74"]
+paths["wpn_ak74_m1"]=paths["wpn_ak74"]
+paths["wpn_ak74u_arena"]=paths["wpn_ak74u"]
+paths["wpn_ak74u_m1"]=paths["wpn_ak74u"]
+paths["wpn_bm16_arena"]=paths["wpn_bm16"]
+paths["wpn_colt_m1"]=paths["wpn_colt1911"]
+paths["wpn_eagle_m1"]=paths["wpn_desert_eagle"]
+paths["wpn_fn2000_arena"]=paths["wpn_fn2000"]
+paths["wpn_fort_m1"]=paths["wpn_fort"]
+paths["wpn_g36_arena"]=paths["wpn_g36"]
+paths["wpn_g36_m1"]=paths["wpn_g36"]
+paths["wpn_gauss_m1"]=paths["wpn_gauss"]
+paths["wpn_gm94_slozhenniy"]=paths["wpn_gm94"]
+paths["wpn_groza_arena"]=paths["wpn_groza"]
+paths["wpn_groza_m1"]=paths["wpn_groza"]
+paths["wpn_l85_m1"]=paths["wpn_l85"]
+paths["wpn_l85_m2"]=paths["wpn_l85"]
+paths["wpn_lr300_m1"]=paths["wpn_lr300"]
+paths["wpn_mp5_arena"]=paths["wpn_mp5"]
+paths["wpn_mp5_m1"]=paths["wpn_mp5"]
+paths["wpn_mp5_m2"]=paths["wpn_mp5"]
+paths["wpn_pm_arena"]=paths["wpn_pm"]
+paths["wpn_rg6_m1"]=paths["wpn_rg-6"]
+paths["wpn_sig_m1"]=paths["wpn_sig550"]
+paths["wpn_sig_m2"]=paths["wpn_sig550"]
+paths["wpn_spas12_arena"]=paths["wpn_spas12"]
+paths["wpn_spas12_m1"]=paths["wpn_spas12"]
+paths["wpn_svd_m1"]=paths["wpn_svd"]
+paths["wpn_toz34_arena"]=paths["wpn_bm16"]
+paths["wpn_val_arena"]=paths["wpn_val"]
+paths["wpn_val_m1"]=paths["wpn_val"]
+paths["wpn_walther_m1"]=paths["wpn_walther"]
+paths["wpn_winchester_m1"]=paths["wpn_wincheaster1300"]
+local ready, previous_id, previous_path = false, nil, nil
+local draw_until, hide_until, last_time = nil, nil, nil
+local disabled = false
+local function stop_draw()
+    if draw_until then pcall(function() level.remove_cam_effector(DRAW_ID) end) end
+    draw_until=nil
+end
+local function stop_hide()
+    if hide_until then pcall(function() level.remove_cam_effector(HIDE_ID) end) end
+    hide_until=nil
+end
+local function clear()
+    stop_draw(); stop_hide()
+    ready=false; previous_id=nil; previous_path=nil; last_time=nil
+end
+function reset() clear(); disabled=false end
+local function blocked(a)
+    if not a or not a:alive() or a:is_talking() or a.health<=0.20 then return true end
+    if device().precache_frame>0 or a:has_info("disabled_ui") then return true end
+    if shiza_hud_items and shiza_hud_items.is_using_item and shiza_hud_items.is_using_item() then return true end
+    if shiza_kill_stress and shiza_kill_stress.is_active and shiza_kill_stress.is_active() then return true end
+    if shiza_radiation and shiza_radiation.is_death_started and shiza_radiation.is_death_started() then return true end
+    if shiza_vodka and shiza_vodka.is_death_started and shiza_vodka.is_death_started() then return true end
+    return false
+end
+local function start_effect(file, effector, now)
+    local duration=level.add_cam_effector("grm_weapon_draw_hide\\"..file..".anm",effector,false,"")
+    if type(duration)~="number" or duration<0.1 or duration>3 then duration=1 end
+    return now+math.ceil(duration*1000)
+end
+local function step(a)
+    if disabled then return end
+    if blocked(a) then clear(); return end
+    local now=time_global()
+    if last_time and now<last_time then clear() end
+    last_time=now
+    if draw_until and now>=draw_until then draw_until=nil end
+    if hide_until and now>=hide_until then hide_until=nil end
+    local w=a:active_item()
+    local id=w and w:id() or nil
+    local path=w and paths[w:section()] or nil
+    if not ready then ready=true; previous_id=id; previous_path=path; return end
+    if id~=previous_id then
+        stop_draw(); stop_hide()
+        if previous_path then
+            local hide=string.gsub(previous_path,"_draw","").."_hide"
+            hide_until=start_effect(hide,HIDE_ID,now)
+        end
+        if path then draw_until=start_effect(path,DRAW_ID,now) end
+        previous_id=id; previous_path=path
+    end
+end
+function update(actor)
+    local ok,err=pcall(step,actor)
+    if not ok then clear(); disabled=true; printf("[grm_weapon_draw_hide_cam] disabled: %s",tostring(err)) end
+end

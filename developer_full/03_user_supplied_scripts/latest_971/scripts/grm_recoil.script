@@ -1,0 +1,83 @@
+-- GRM GBOOBS-inspired visual camera response; no ammunition or damage edits.
+-- Uses magazine decrease as a proxy, not Anomaly's actor_on_weapon_fired.
+local ID = 52763
+local classes = {
+  WP_PM="light", WP_HPSA="light", WP_WALTH="light", WP_USP45="light",
+  WP_AK74="medium", WP_LR300="medium", WP_GROZA="medium", WP_VAL="medium", WP_VINT="medium",
+  WP_BM16="heavy", WP_SHOTG="heavy", WP_SVD="heavy", WP_SVU="heavy",
+  WP_RG6="launcher", WP_RPG7="launcher"
+}
+local special = {
+  wpn_desert_eagle="heavy", wpn_mp5="light", wpn_p90="light", wpn_aps_sk1="light",
+  wpn_gauss="heavy", wpn_pkm="heavy", wpn_m134="heavy", wpn_rpk74="heavy"
+}
+local cache, old_id, old_ammo, old_mode, last_time, side = {},nil,nil,nil,0,false
+local warned=false
+local function sample_clear() old_id=nil; old_ammo=nil; old_mode=nil end
+-- Firearm configurations with automatic/burst mode and >=600 rpm use a softer visual camera.
+local soft_cache = {}
+local function use_soft_camera(sec)
+ if soft_cache[sec] ~= nil then return soft_cache[sec] end
+ local ok, result=pcall(function()
+  local ini=system_ini()
+  if not ini:section_exist(sec) or not ini:line_exist(sec,"rpm") or not ini:line_exist(sec,"fire_modes") then return false end
+  local rpm=ini:r_float(sec,"rpm")
+  local modes=ini:r_string(sec,"fire_modes")
+  if type(rpm)~="number" or rpm<600 or type(modes)~="string" then return false end
+  for mode in string.gmatch(modes,"[^,%s]+") do
+   local n=tonumber(mode)
+   if n and (n==-1 or n>1) then return true end
+  end
+  return false
+ end)
+ soft_cache[sec]=(ok and result==true)
+ return soft_cache[sec]
+end
+local function profile(sec)
+ if cache[sec] ~= nil then return cache[sec] or nil end
+ local p=special[sec]
+ if not p then
+  local ok, c=pcall(function()
+   local ini=system_ini()
+   if not ini:section_exist(sec) or not ini:line_exist(sec,"class") then return nil end
+   return ini:r_string(sec,"class")
+  end)
+  if ok and type(c)=="string" then p=classes[string.upper(c):gsub("%s+","")] end
+ end
+ cache[sec]=p or false
+ return p
+end
+function reset()
+ sample_clear(); last_time=0; side=false
+ pcall(function() level.remove_cam_effector(ID) end)
+end
+local function step(actor)
+ if not actor or not actor:alive() or device().precache_frame>0 or actor:is_talking() or actor:has_info("disabled_ui") then sample_clear(); return end
+ if shiza_hud_items and shiza_hud_items.is_using_item and shiza_hud_items.is_using_item() then sample_clear(); return end
+ if shiza_radiation and shiza_radiation.is_death_started and shiza_radiation.is_death_started() then sample_clear(); return end
+ if shiza_vodka and shiza_vodka.is_death_started and shiza_vodka.is_death_started() then sample_clear(); return end
+ local w=actor:active_item()
+ if not w then sample_clear(); return end
+ local sec=w:section()
+ if type(sec)~="string" then sample_clear(); return end
+ local p=profile(sec)
+ if not p then sample_clear(); return end
+ local id, ammo = w:id(), w:get_ammo_in_magazine()
+ if type(id)~="number" or type(ammo)~="number" then sample_clear(); return end
+ -- A mode transition (e.g. underbarrel grenade launcher) must not look like a shot.
+ local ok, mode = pcall(function() return w:weapon_in_grenade_mode() end)
+ if not ok then mode=nil end
+ local now=time_global()
+ if old_id==id and old_ammo~=nil and old_mode==mode and ammo<old_ammo and now>=last_time+35 then
+  side=not side; last_time=now
+  local folder=use_soft_camera(sec) and "grm_recoil_soft\\" or "grm_recoil\\"
+  local path=folder..p..(side and "_left.anm" or "_right.anm")
+  pcall(function() level.remove_cam_effector(ID) end)
+  level.add_cam_effector(path, ID, false, "")
+ end
+ old_id, old_ammo, old_mode=id,ammo,mode
+end
+function update(actor)
+ local ok,err=pcall(step,actor)
+ if not ok then sample_clear(); if not warned then printf("[grm_recoil] %s",tostring(err)); warned=true end end
+end

@@ -1,0 +1,10 @@
+tasks=0 legacy=30 compact=30 saved=0
+tasks=1 legacy=62 compact=62 saved=0
+tasks=10 legacy=337 compact=268 saved=69
+tasks=146 legacy=4451 compact=3396 saved=1055
+tasks=254 legacy=7720 compact=5883 saved=1837
+tasks=255 legacy=7744 compact=5906 saved=1838
+PASS legacy and compact round trips, marker 255, custom statuses, defend task
+PASS following components remain aligned
+PASS: truncated compact header 8/10 and 9/10 error before read; complete empty header
+Syntax checked

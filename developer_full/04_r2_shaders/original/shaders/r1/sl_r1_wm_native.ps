@@ -1,0 +1,10 @@
+// Preserve the native Screen_SET mode 6 texture/diffuse-alpha operation.
+uniform sampler2D s_base;
+struct pin { float4 color : COLOR0; float2 uv : TEXCOORD0; };
+float4 main(pin I) : COLOR
+{
+    float4 C = tex2D(s_base, I.uv);
+    C.rgb = lerp(C.rgb, I.color.rgb, saturate(I.color.a));
+    C.a *= I.color.a;
+    return C;
+}

@@ -1,0 +1,87 @@
+-- Experimental: draw accent around frame 11, based on active item transition.
+local ID = 28747
+local ready, previous, pending_id, due, playing_until, pending_file = false, nil, nil, nil, nil, nil
+local disabled = false
+local blood_stream, blood_stream_until = nil, nil
+local function stop_blood_stream()
+    if blood_stream then pcall(function() blood_stream:stop() end) end
+    blood_stream, blood_stream_until = nil, nil
+end
+local function stop()
+    if playing_until then pcall(function() level.remove_cam_effector(ID) end) end
+    pending_id, due, playing_until, pending_file = nil, nil, nil, nil
+    stop_blood_stream()
+end
+function reset() stop(); ready=false; previous=nil; disabled=false end
+local function blocked(a)
+    if not a or not a:alive() or a:is_talking() or a.health <= 0.20 then return true end
+    if device().precache_frame > 0 or a:has_info("disabled_ui") then return true end
+    if shiza_hud_items and shiza_hud_items.is_using_item and shiza_hud_items.is_using_item() then return true end
+    if shiza_kill_stress and shiza_kill_stress.is_active and shiza_kill_stress.is_active() then return true end
+    if shiza_radiation and shiza_radiation.is_death_started and shiza_radiation.is_death_started() then return true end
+    if shiza_vodka and shiza_vodka.is_death_started and shiza_vodka.is_death_started() then return true end
+    return false
+end
+-- Visual effect only: no health damage or bleeding state.
+local blood_warned = false
+local function blood_effect(is_draw, now)
+    local ok, err = pcall(function()
+        local d = device()
+        if not d or not d.cam_pos or not d.cam_dir or not d.cam_top then return end
+        local p, v, up = d.cam_pos, d.cam_dir, d.cam_top
+        local pos = vector():set(p.x + v.x * 0.40 - up.x * 0.18,
+                                 p.y + v.y * 0.40 - up.y * 0.18,
+                                 p.z + v.z * 0.40 - up.z * 0.18)
+        local effect_name = is_draw and "hit_fx\\group_items\\hit_blood_puff_01"
+                                    or "hit_fx\\group_items\\hit_blood_drops_01"
+        local fx = particles_object(effect_name)
+        if fx then fx:play_at_pos(pos) end
+        if not is_draw then
+            -- The stronger burst and short fountain now play on hide.
+            local extra = particles_object("hit_fx\\group_items\\hit_blood_drops_01")
+            if extra then extra:play_at_pos(pos) end
+            blood_stream = particles_object("ghoul\\blood-fountain-01")
+            if blood_stream then
+                blood_stream_until = now + 350
+                blood_stream:play_at_pos(pos)
+            end
+        end
+    end)
+    if not ok then stop_blood_stream() end
+    if not ok and not blood_warned then
+        blood_warned = true
+        printf("[grm_knife_blood] particle error: %s", tostring(err))
+    end
+end
+local function step(a)
+    if disabled then return end
+    if blocked(a) then stop(); ready=false; previous=nil; return end
+    local now=time_global()
+    if blood_stream_until and now>=blood_stream_until then stop_blood_stream() end
+    if playing_until and now>=playing_until then playing_until=nil end
+    local w=a:active_item()
+    local id = w and w:section()=="wpn_knife" and w:id() or nil
+    if not ready then ready=true; previous=id; return end
+    if id~=previous then
+        stop()
+        if id then
+            pending_id=id; due=now+183; pending_file="grm_knife_draw_cam\\knife_draw_1.anm"
+        elseif previous then
+            pending_id=nil; due=now; pending_file="grm_knife_draw_cam\\knife_draw_2.anm"
+        end
+        previous=id
+    end
+    if due and now>=due then
+        if id==pending_id then
+            if not id then blood_effect(false, now) end
+            local duration=level.add_cam_effector(pending_file,ID,false,"")
+            if type(duration)~="number" or duration<0.1 or duration>1.0 then duration=0.5 end
+            playing_until=now+math.ceil(duration*1000)
+        end
+        pending_id=nil; due=nil; pending_file=nil
+    end
+end
+function update(a)
+    local ok,err=pcall(step,a)
+    if not ok then stop(); disabled=true; printf("[grm_knife_draw_cam] disabled: %s",tostring(err)) end
+end

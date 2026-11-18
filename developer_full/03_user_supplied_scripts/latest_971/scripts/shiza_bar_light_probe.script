@@ -1,0 +1,86 @@
+local scan, done, previous_level = nil, false, nil
+local BATCH = 128
+local DELAY = 50
+local MAX_ID = 65534
+local RADIUS2 = 25 * 25
+
+local function news(text)
+    if not db or not db.actor then return end
+    pcall(function()
+        db.actor:give_game_news(text, "ui\\ui_iconsTotal", Frect():set(83,470,83,47), 0, 12000)
+    end)
+end
+function reset()
+    scan, done, previous_level = nil, false, nil
+end
+local function location()
+    local ok, name = pcall(function() return string.lower(level.name()) end)
+    if ok then return name end
+    return nil
+end
+local function is_bar(name)
+    return name == "l05_bar" or name == "l05_bar_ai"
+end
+local function get_actor_torch()
+    local ok, value = pcall(function()
+        local torch = db.actor:object("device_torch")
+        if not torch then return "missing" end
+        local enabled = torch:attachable_item_enabled()
+        if enabled == true then return "attached" end
+        if enabled == false then return "not-attached" end
+        return "unknown"
+    end)
+    return ok and value or "unsupported"
+end
+local function lamp_section(s, section)
+    if s.classes[section] ~= nil then return s.classes[section] end
+    local ok, class_name = pcall(function()
+        local ini = system_ini()
+        if not ini:section_exist(section) or not ini:line_exist(section, "class") then return "" end
+        return ini:r_string(section, "class")
+    end)
+    local match = ok and type(class_name)=="string" and string.upper(class_name):gsub("%s+", "") == "O_HLAMP"
+    s.classes[section] = match == true
+    return s.classes[section]
+end
+function update()
+    if not db or not db.actor then return end
+    local loc = location()
+    if loc ~= previous_level then scan, done, previous_level = nil, false, loc end
+    if not is_bar(loc) or done then return end
+    local now = time_global()
+    if not scan then
+        local ok, id = pcall(function() return db.actor:id() end)
+        if not ok then return end
+        scan = {id=0, actor=id, start=now, next_tick=now+3000, total=0, near=0, classes={}}
+        return
+    end
+    local s = scan
+    local ok_id, actor_id = pcall(function() return db.actor:id() end)
+    if not ok_id or actor_id ~= s.actor or now < s.start then reset() return end
+    if now < s.next_tick then return end
+    s.next_tick = now + DELAY
+    local finish = math.min(s.id+BATCH-1, MAX_ID)
+    for id=s.id,finish do
+        local ok, obj = pcall(function() return level.object_by_id(id) end)
+        if ok and obj then
+            local section_ok, section = pcall(function() return obj:section() end)
+            if section_ok and type(section)=="string" and lamp_section(s,section) then
+                s.total = s.total + 1
+                local pos_ok, distance2 = pcall(function()
+                    local a, p = db.actor:position(), obj:position()
+                    local x,y,z = p.x-a.x, p.y-a.y, p.z-a.z
+                    return x*x+y*y+z*z
+                end)
+                if pos_ok and distance2 <= RADIUS2 then s.near=s.near+1 end
+            end
+        end
+    end
+    s.id = finish + 1
+    if s.id > MAX_ID then
+        done = true
+        local torch = get_actor_torch()
+        news("BAR SCAN: lamps="..s.total.." near="..s.near.." torch="..torch)
+        scan = nil
+    end
+end

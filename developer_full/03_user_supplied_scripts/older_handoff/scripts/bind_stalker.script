@@ -1,0 +1,563 @@
+function init    (obj)
+	xr_motivator.AddToMotivator(obj)
+end
+
+function actor_init    (npc)
+	npc:bind_object(actor_binder(npc))
+end
+
+local game_difficulty_by_num = {
+	[0] = "gd_novice",
+	[1] = "gd_stalker",
+	[2] = "gd_veteran",
+	[3] = "gd_master"
+	}
+
+lasthealth  = 0
+lasttime	= 0
+post_process = 0
+local weapon_hide = false
+ 
+class "actor_binder" (object_binder)
+ 
+function actor_binder:__init (obj) super(obj)
+	self.bCheckStart = false
+	self.weather_manager = level_weathers.WeatherManager()
+	self.actor_detector = xr_detector.actor_detector()
+end
+ 
+function actor_binder:net_spawn(data)
+	printf("actor net spawn")		
+
+	level.show_indicators()
+
+	self.bCheckStart = true
+	self.weapon_hide = false  
+	weapon_hide = false  
+
+	if object_binder.net_spawn(self,data) == false then
+		return false
+	end
+
+	db.add_actor(self.object)
+    sl_rotting.on_actor_ready()
+    sl_crows.on_actor_ready()
+	
+	if self.st.disable_input_time == nil then
+		level.enable_input()
+	end
+
+	self.weather_manager:reset()
+ 
+
+	 
+	death_manager.init_drop_settings()
+
+	shiz.start_vision()
+	
+ 
+	bolt_mod.net_spawn()
+ 
+
+	return true
+end
+ 
+function actor_binder:net_destroy()
+    pcall(function() grm_eyes_open.reset() end)
+    pcall(function() grm_night_pp.reset() end)
+    pcall(function() grm_walk_cam.reset() end)
+    pcall(function() shiza_bar_light_flicker.reset() end)
+    shiza_syringe.reset()
+
+	sl_crows.reset()
+	pcall(function() shiza_skeleton_illusion.reset() end)
+	sl_rotting.reset()
+	shiza_horror.reset()
+	pcall(function() shiza_false_shot.reset() end)
+	shiza_hud_items.reset()
+	shiza_radiation.reset()
+	shiza_vodka.reset()
+	shiza_kill_stress.reset()
+	sl_actor_camera.reset()
+	db.del_actor(self.object)
+
+    sr_light.clean_up ()
+
+	pcall(function() self.object:set_callback(callback.hit, nil) end)
+	self.object:set_callback(callback.inventory_info, nil)
+	self.object:set_callback(callback.article_info, nil)
+	self.object:set_callback(callback.on_item_take, nil)
+	self.object:set_callback(callback.on_item_drop, nil)
+	 
+	self.object:set_callback(callback.task_state, nil)
+	self.object:set_callback(callback.level_border_enter, nil)
+	self.object:set_callback(callback.level_border_exit, nil)
+	self.object:set_callback(callback.take_item_from_box, nil)
+	self.object:set_callback(callback.use_object, nil)
+
+	if sr_psy_antenna.psy_antenna then
+		sr_psy_antenna.psy_antenna:destroy()
+		sr_psy_antenna.psy_antenna = false
+	end
+
+	xr_sound.stop_all_sound_object()
+	
+ 
+	bolt_mod.net_destroy()
+ 
+
+	object_binder.net_destroy(self)
+end
+ 
+function actor_binder:reinit()
+    pcall(function() grm_eyes_open.reinit() end)
+    pcall(function() grm_night_pp.reset() end)
+    pcall(function() grm_walk_cam.reset() end)
+    pcall(function() shiza_bar_light_flicker.reset() end)
+    shiza_syringe.reset()
+
+	sl_crows.reset()
+	pcall(function() shiza_skeleton_illusion.reset() end)
+	sl_rotting.reset()
+	shiza_horror.reset()
+	pcall(function() shiza_false_shot.reset() end)
+	shiza_hud_items.reset()
+	shiza_radiation.reset()
+	shiza_vodka.reset()
+	shiza_kill_stress.reset()
+	sl_actor_camera.reset()
+	object_binder.reinit(self)
+	
+	local npc_id = self.object:id()
+
+	db.storage[npc_id] = { }
+
+	self.st = db.storage[npc_id]
+	self.st.pstor = nil
+
+	self.next_restrictors_update_time = -10000
+
+	-- Optional actor hit callback: support varies by engine build.
+	local grm_hit_ok, grm_hit_err = pcall(function()
+		self.object:set_callback(callback.hit, self.grm_bloodsucker_hit_callback, self)
+	end)
+	if not grm_hit_ok then printf("[GRM_BLOODSUCKER] Hit callback unavailable: %s", tostring(grm_hit_err)) end
+	self.object:set_callback(callback.inventory_info, self.info_callback, self)
+	self.object:set_callback(callback.article_info, self.article_callback, self)
+	self.object:set_callback(callback.on_item_take, self.on_item_take, self)
+	self.object:set_callback(callback.on_item_drop, self.on_item_drop, self)
+	self.object:set_callback(callback.trade_sell_buy_item, self.on_trade, self)  
+	 
+	self.object:set_callback(callback.task_state, self.task_callback, self)
+	 
+	self.object:set_callback(callback.level_border_enter, self.level_border_enter, self)
+	self.object:set_callback(callback.level_border_exit, self.level_border_exit, self)
+	self.object:set_callback(callback.take_item_from_box, self.take_item_from_box, self)
+	self.object:set_callback(callback.use_object, self.use_callback, self)
+end
+
+function actor_binder:grm_bloodsucker_hit_callback(obj, amount, local_direction, who, bone_index)
+	pcall(function() sl_actor_camera.on_bloodsucker_hit(who, amount) end)
+end
+
+function actor_binder:use_callback(obj, who)
+    shiza_syringe.on_engine_item_used(obj)
+ 
+	bolt_mod.on_actor_use(obj)
+ 
+	shiza_hud_items.on_actor_use(obj)
+end 
+
+ 
+function actor_binder:take_item_from_box(box, item)
+	local story_id = box:story_id()
+	if story_id == nil then
+		return
+	end
+
+	treasure_manager.take_item_from_box(box, story_id)
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+end
+ 
+function actor_binder:level_border_enter(npc, info_id)
+	self.actor_detector:actor_enter()
+end
+ 
+function actor_binder:level_border_exit(npc, info_id)
+	self.actor_detector:actor_exit()
+end
+ 
+function actor_binder:info_callback(npc, info_id)
+	printf("*INFO*: npc='%s' id='%s'", npc:name(), info_id)
+	 
+	level_tasks.proceed(self.object)
+	 
+	level_tasks.process_info_portion(info_id)
+	
+ 
+	bolt_mod.on_info(info_id)
+ 
+end
+ 
+function actor_binder:on_trade (item, sell_bye, money)
+    if sell_bye == true then
+       game_stats.money_trade_update (money)
+    else       
+       game_stats.money_trade_update (-money) 
+    end   
+end
+ 
+function actor_binder:article_callback(npc, group, name)
+ 
+	if device().precache_frame >1 then return end
+	
+	if group == "Diary" then
+		news_manager.send_encyclopedy("diary")
+	else
+		news_manager.send_encyclopedy("encyclopedy")
+	end
+end
+ 
+function actor_binder:on_item_take (obj)
+	take_item_sounds.take_items(obj)
+	sl_actor_camera.on_item_take(self.object, obj)
+    level_tasks.proceed(self.object)
+     
+	
+ 
+	bolt_mod.on_item_take(obj)
+ 
+end
+ 
+function actor_binder:on_item_drop (obj)
+    level_tasks.proceed(self.object)
+     
+	
+ 
+	bolt_mod.on_item_drop (obj)
+ 
+end
+ 
+
+function actor_binder:task_callback(_task, _objective, _state)
+	task_manager.task_callback(_task:get_id(), _objective:get_idx(), _state)
+	if _objective:get_idx() == 0 then
+		if _state == task.fail then
+			news_manager.send_task(db.actor, "fail")
+		elseif _state == task.completed then
+			task_manager.reward_by_task(_task)
+			news_manager.send_task(db.actor, "complete")
+		else
+			news_manager.send_task(db.actor, "new")
+		end
+	else
+		if _task:get_objective(0):get_state() == task.in_progress then
+			news_manager.send_task(db.actor, "update")
+		end
+	end
+end
+
+ 
+function actor_binder:map_location_added_callback(spot_type_str, object_id)
+	if (false==app_ready()) or (device().precache_frame>1) then return end
+	 
+end
+ 
+local grm_r2_profile_started = false
+local grm_r2_profile_error_reported = false
+function actor_binder:update(delta)
+    if not grm_r2_profile_started then
+        grm_r2_profile_started = true
+        printf("[GRM_R2_PERF] actor_binder update active")
+    end
+    local grm_ok, grm_error = pcall(function() grm_r2_profile.update() end)
+    if not grm_ok and not grm_r2_profile_error_reported then
+        grm_r2_profile_error_reported = true
+        printf("[GRM_R2_PERF] call error: %s", tostring(grm_error))
+    end
+    pcall(function() grm_eyes_open.update(self.object) end)
+    pcall(function() grm_night_pp.update(self.object) end)
+    pcall(function() grm_walk_cam.update(self.object) end)
+    pcall(function() shiza_bar_light_flicker.update() end)
+	 
+	if swm_legs then swm_legs.actor_update() end
+	object_binder.update(self, delta)
+     
+    shiza_radiation.restore_pending()
+    shiza_vodka.restore_pending()
+    shiza_vodka.update()
+    shiza_kill_stress.update()
+    shiza_syringe.update()
+	sl_actor_camera.update(self.object)
+
+	 
+ 
+
+ 
+	bolt_mod.update()
+ 
+
+	local time = time_global()
+	
+	game_stats.update (delta, self.object)
+
+	 
+	self.weather_manager:update()
+	pcall(function() grm_weather_variants.update() end)
+	
+	 
+	self.actor_detector:update()
+
+	 
+	xr_sound.update_actor()
+	
+	 
+ 
+
+
+
+
+
+
+	
+	 
+	if self.st.disable_input_time ~= nil and
+	   game.get_game_time():diffSec(self.st.disable_input_time) >= self.st.disable_input_idle 
+	then
+		level.enable_input()
+		self.st.disable_input_time = nil
+	end
+	 
+	if self.st.sleep_relocate_time ~= nil and
+	   game.get_game_time():diffSec(self.st.sleep_relocate_time) >= self.st.sleep_relocate_idle 
+	then
+		self.object:set_actor_position(self.st.sleep_relocate_point)
+		local dir = self.st.sleep_relocate_point:sub(self.st.sleep_relocate_look)
+		self.object:set_actor_direction(dir:getH())
+		self.st.sleep_relocate_time = nil
+	end
+
+	 
+	if weapon_hide == true or self.object:is_talking() then
+		if self.weapon_hide == false then
+			self.object:hide_weapon()
+			self.weapon_hide = true
+		end
+	else
+		if self.weapon_hide == true then
+			self.object:restore_weapon()
+			self.weapon_hide = false
+		end
+	end	
+
+	 
+	if self.next_restrictors_update_time < time then
+		bind_restrictor.actor_update(delta)
+
+		self.next_restrictors_update_time = time + 200
+
+		task_manager.actor_update()
+	end
+
+	 
+	if post_process ~= 0 then
+		if post_process:update () == true then
+		   post_process = 0
+		end
+	end
+
+	 
+	if sr_psy_antenna.psy_antenna then
+		sr_psy_antenna.psy_antenna:update(delta)
+	end
+
+	 
+    shiza_radiation.update(self.object.radiation, delta)
+    sl_crows.update()
+    sl_rotting.update()
+    pcall(function() shiza_skeleton_illusion.update() end)
+    shiza_horror.update()
+    pcall(function() shiza_false_shot.update() end)
+
+ 	if self.bCheckStart then
+		printf("SET DEFAULT INFOS")		
+
+		if not has_alife_info("storyline_actor_start") and
+		   (level.name() == "l01_escape")
+		then
+			self.object:give_info_portion("storyline_actor_start")
+			_G.g_start_avi = true
+			printf("*AVI* RUN START AVI")			
+		end
+
+		if not has_alife_info("encyclopedy") then
+			self.object:give_info_portion("encyclopedy")
+		end
+
+		if not has_alife_info("global_dialogs") then
+			self.object:give_info_portion("global_dialogs")
+		end
+
+		if not has_alife_info("level_changer_icons") then
+			self.object:give_info_portion("level_changer_icons")
+		end
+
+		level_tasks.add_lchanger_location()
+
+		math.randomseed(time_global())
+		shiza_sms.set_timer()
+		
+		shiza_hud_items.on_first_update()
+		
+		self.bCheckStart = false		
+	end		
+	
+	
+end
+ 
+function actor_binder:save(packet)
+    pcall(function() shiza_skeleton_illusion.before_save() end)
+    pcall(function() shiza_bar_light_flicker.before_save() end)
+	
+	local save_treasure_manager = true
+	
+	printf("actor_binder:save(): self.object:name()='%s'", self.object:name())
+	object_binder.save(self, packet)
+
+	 
+	if save_treasure_manager == true then
+		packet:w_u8(level.get_game_difficulty() + 128)
+	else
+		packet:w_u8(level.get_game_difficulty())
+	end
+
+
+	 
+	if self.st.disable_input_time == nil then
+		packet:w_bool(false)
+	else
+		packer:w_bool(true)
+		utils.w_CTime(packet, self.st.disable_input_time)
+	end
+
+     
+    shiza_hud_items.save_state(self.object)
+    shiza_radiation.save_state(self.object)
+    shiza_vodka.save_state(self.object)
+    shiza_kill_stress.save_state(self.object)
+    shiza_syringe.save_state(self.object)
+	xr_logic.pstor_save_all(self.object, packet)
+	self.weather_manager:save(packet)
+
+	sr_psy_antenna.save( packet )
+	
+	if save_treasure_manager == true then
+		treasure_manager.save(packet)      
+	end                                  
+
+	task_manager.save(packet)
+	self.actor_detector:save(packet)	
+end
+ 
+function actor_binder:load(reader)
+	printf("actor_binder:load(): self.object:name()='%s'", self.object:name())
+	object_binder.load(self, reader)
+	printf("actor_binder:object_binder.load(): self.object:name()='%s'", self.object:name())
+
+	 
+	local game_difficulty = reader:r_u8()
+	
+	local load_treasure_manager = false      
+	if game_difficulty >= 128 then           
+		game_difficulty = game_difficulty - 128
+		load_treasure_manager = true           
+	end                                      
+
+	
+	get_console():execute("g_game_difficulty "..game_difficulty_by_num[game_difficulty])
+
+	if reader:r_eof() then
+		abort("SAVE FILE IS CORRUPT")
+	end
+
+	local stored_input_time = reader:r_u8()
+	if stored_input_time == true then
+		self.st.disable_input_time = utils.r_CTime(reader)
+	end
+
+	xr_logic.pstor_load_all(self.object, reader)
+     
+    shiza_hud_items.queue_load_state(self.object)
+    shiza_radiation.queue_load_state(self.object)
+    shiza_vodka.queue_load_state(self.object)
+    shiza_kill_stress.queue_load_state(self.object)
+    shiza_syringe.queue_load_state(self.object)
+	self.weather_manager:load(reader)
+
+	sr_psy_antenna.load(reader)
+	
+	if load_treasure_manager == true then
+		treasure_manager.load(reader)      
+	end                                  
+
+	
+	task_manager.load(reader)
+	self.actor_detector:load(reader)	
+    pcall(function() grm_eyes_open.queue_load() end)
+end
+ 
+
+ 
+ 
+ 
+ 
+
+
+ 
+function hide_weapon()
+	weapon_hide = true
+end
+function restore_weapon()
+	weapon_hide = false
+end
+
+-- Проверка перебора секции
+--[[
+local function test_section_iteration(file_name, section_name)
+	printf			("file    : %s",file_name)
+	printf			("section : %s",section_name)
+	
+	local			file = ini_file(file_name)
+	local			n = file:line_count(section_name)
+	printf			("lines   : %d",n)
+	
+	local			id, value = "", "", result
+	for i=0,n-1 do
+		result, id, value	= file:r_line(section_name,i,"","")
+		printf		("line %d : %s = %s",i,id,value)
+	end
+end
+
+test_section_iteration("system.ltx","space_restrictor")
+]]--
+
+

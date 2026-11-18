@@ -1,0 +1,2 @@
+PASS: actor save/load byte order, 4 difficulties, pause present/absent; mocks only
+Syntax checked

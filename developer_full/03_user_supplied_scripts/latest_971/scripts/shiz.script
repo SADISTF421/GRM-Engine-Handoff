@@ -1,0 +1,6 @@
+-- Включаем постэффект
+function start_vision()
+    if db.actor then
+        level.add_pp_effector("dead_zone.ppe", 0, true)
+    end
+end

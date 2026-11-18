@@ -1,0 +1,29 @@
+-- Short, non-looping camera animation for the regular game-over tutorial.
+local CAMERA_ID = 52988
+local CAMERA_FILE = "grm_death_transition\\death_tremor.anm"
+local camera_active = false
+
+function reset()
+    if camera_active then
+        pcall(function() level.remove_cam_effector(CAMERA_ID) end)
+        camera_active = false
+    end
+end
+
+function start()
+    reset()
+    local ok, err = pcall(function()
+        level.add_cam_effector(CAMERA_FILE, CAMERA_ID, false, "")
+    end)
+    if ok then
+        camera_active = true
+    else
+        pcall(function() printf("[GRM_DEATH] camera unavailable: %s", tostring(err)) end)
+    end
+end
+
+function finish()
+    reset()
+    -- Preserve the original tutorial's stop behavior.
+    xr_effects.on_tutor_gameover_stop()
+end

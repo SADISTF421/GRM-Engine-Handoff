@@ -1,0 +1,1 @@
+PASS: payload hashes, source copies, folder layout, only script payload

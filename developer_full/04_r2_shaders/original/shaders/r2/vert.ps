@@ -1,0 +1,30 @@
+#include "common.h"
+
+struct 	v2p
+{
+ 	half2 	tc0: 	TEXCOORD0;	// base
+  	half3	c0:		COLOR0;
+};
+
+//////////////////////////////////////////////////////////////////////////////////////////
+// Pixel
+half4 	main		( v2p I )	: COLOR
+{
+	half4	t_base 	= tex2D		(s_base,I.tc0);
+	half3	final 	= t_base*I.c0*2;
+
+	// === КОД ДЕПРЕССИИ: ДЕСАТУРАЦИЯ ===
+	// Находим общую яркость пикселя (Luminance)
+	half  luma = dot(final, half3(0.299, 0.587, 0.114));
+	
+	// Коэффициент серости: 0.0 - оригинал, 1.0 - полный ч/б.
+	// Для гнетущей атмосферы GRM рекомендую от 0.5 до 0.7
+	half  desat_factor = 0.65; 
+	
+	// Смешиваем цвет с его серой копией
+	final = lerp(final, luma.xxx, desat_factor);
+	// ==================================
+
+	// out
+	return  half4	(final, t_base.a);
+}

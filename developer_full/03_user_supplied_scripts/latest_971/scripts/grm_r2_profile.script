@@ -1,0 +1,53 @@
+-- Замеры R2 после запуска актора; графику и игровые механики не меняет.
+local plugin = nil
+local attempted = false
+local last_report = nil
+local last_signature = ""
+
+local function setup()
+    if attempted then return end
+    attempted = true
+    local ok, result = pcall(function()
+        if type(grm_stress_loadlib) ~= "function" then
+            printf("[GRM_R2_PERF] Загрузчик плагинов недоступен")
+            return nil
+        end
+        local path = getFS():update_path("$game_data$", "plugins\\grm_r2_profile\\grm_r2_profile.dll")
+        local loader, why = grm_stress_loadlib(path, "luaopen_grm_r2_profile")
+        if not loader then
+            printf("[GRM_R2_PERF] Плагин не загружен: %s", tostring(why))
+            return nil
+        end
+        local p = loader()
+        if type(p) ~= "table" or type(p.install) ~= "function" or type(p.stats) ~= "function" or not p.install() then
+            printf("[GRM_R2_PERF] R2 не совпадает с проверенной версией; замеры отключены")
+            return nil
+        end
+        printf("[GRM_R2_PERF] Замеры включены после загрузки актора; начальная загрузка не учтена")
+        return p
+    end)
+    if ok then plugin = result else printf("[GRM_R2_PERF] Ошибка запуска: %s", tostring(result)) end
+end
+
+local function tick()
+    if not attempted then setup() end
+    if not plugin then return end
+    local now = time_global()
+    if last_report and now >= last_report and now - last_report < 5000 then return end
+    last_report = now
+    local count, total, maximum, failures, resets, reset_total, reset_max = plugin.stats()
+    local signature = tostring(count) .. ":" .. tostring(resets)
+    if signature ~= last_signature then
+        last_signature = signature
+        printf("[GRM_R2_PERF] Компиляция: вызовов=%s, мс_сумма=%s, мс_макс=%s, ошибок=%s; reset_end: вызовов=%s, мс_сумма=%s, мс_макс=%s", tostring(count), tostring(total), tostring(maximum), tostring(failures), tostring(resets), tostring(reset_total), tostring(reset_max))
+    end
+end
+
+function update()
+    local ok, err = pcall(tick)
+    if not ok then
+        plugin = nil
+        attempted = true
+        printf("[GRM_R2_PERF] Замеры остановлены: %s", tostring(err))
+    end
+end

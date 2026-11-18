@@ -1,0 +1,74 @@
+--- /data/grm/current2026/scripts.rar/scripts/xr_motivator.script
++++ /data/grm_transfer_stage/02_versions/user_latest_scripts/scripts/xr_motivator.script
+@@ -127,6 +127,7 @@
+ end
+ 
+ function motivator_binder:reinit()
++	pcall(function() grm_gore_test.reset_binder(self) end)
+ 	self.grm_active_ragdoll = nil
+     object_binder.reinit(self)
+      
+@@ -155,7 +156,7 @@
+ end
+  
+ function motivator_binder:net_spawn(sobject)
+-	printf("motivator_binder:net_spawn(): self.object:name()='%s'", self.object:name())
++
+ 	 
+ 	if not object_binder.net_spawn(self, sobject) then
+ 		return false
+@@ -205,6 +206,7 @@
+ end
+ 
+ function motivator_binder:net_destroy()
++	pcall(function() grm_gore_test.reset_binder(self) end)
+ 	self.grm_active_ragdoll = nil
+ 	 
+ 
+@@ -246,9 +248,7 @@
+ 		xr_logic.issue_event(self.object, self.st.hit, "hit_callback", obj, amount, local_direction, who, bone_index)
+ 	end
+ 	if amount > 0 then
+-		printf("HIT_CALLBACK: %s amount=%s bone=%s", obj:name(), amount, tostring(bone_index))
+ 		local is_head, head_id = shiza_gore_on_hit(self.object, bone_index)
+-		printf("[GORE_DIAG] hit id=%s bone=%s head_id=%s is_head=%s amount=%s", tostring(self.object:id()), tostring(bone_index), tostring(head_id), tostring(is_head), tostring(amount))
+ 		if self.st then
+ 			if is_head then
+ 				local attacker_id = nil
+@@ -279,7 +279,6 @@
+ 		local who_ok, value = pcall(function() return who:id() end)
+ 		if who_ok then death_who_id = tonumber(value) end
+ 	end
+-	printf("[GORE_DIAG] death id=%s killer=%s", tostring(self.object:id()), tostring(death_who_id))
+ 	local last_head_hit = self.st and self.st.shiza_gore_last_head_hit
+ 	if last_head_hit then
+ 		local killer_id = nil
+@@ -290,7 +289,6 @@
+ 		if last_head_hit.who_id ~= nil and killer_id == last_head_hit.who_id and time_global() - last_head_hit.time <= SHIZA_GORE_DEATH_WINDOW then
+ 			-- Старое скрытие кости отключено: видимость обрабатывает отдельный рендер-тест.
+ 		else
+-			printf("[GORE_DIAG] смерть не совпала с недавним попаданием в голову id=%s", tostring(self.object:id()))
+ 		end
+ 		self.st.shiza_gore_last_head_hit = nil
+ 	end
+@@ -463,7 +461,7 @@
+ end
+ 
+ function motivator_binder:save(packet)
+-	printf("motivator_binder:save(): self.object:name()='%s'", self.object:name())
++
+ 	object_binder.save(self, packet)
+ 
+ 	packet:w_bool(self.treasure_processed)
+@@ -476,9 +474,9 @@
+ function motivator_binder:load(reader)
+ 	self.loaded = true
+ 
+-	printf("motivator_binder:load(): self.object:name()='%s'", self.object:name())
++
+ 	object_binder.load(self, reader)
+-	printf("motivator_binder:object_binder.load(): self.object:name()='%s'", self.object:name())
++
+ 
+ 	if reader:r_eof() then
+ 		abort("SAVE FILE IS CORRUPT")

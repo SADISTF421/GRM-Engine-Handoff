@@ -1,0 +1,67 @@
+-- GRM experimental weapon camera. Does not replace callbacks or alter ammo.
+local ID = 28744
+local MIN_INTERVAL = 125
+local paths = {
+    ["wpn_abakan"] = "grm_weapon_cam\\owa_94_shoot.anm",
+    ["wpn_ak74u"] = "grm_weapon_cam\\owa_ak74u_shoot.anm",
+    ["wpn_beretta"] = "grm_weapon_cam\\owa_92_shoot.anm",
+    ["wpn_colt1911"] = "grm_weapon_cam\\owa_cult_shoot.anm",
+    ["wpn_desert_eagle"] = "grm_weapon_cam\\owa_desert_eagle_shoot.anm",
+    ["wpn_fort"] = "grm_weapon_cam\\owa_92_shoot.anm",
+    ["wpn_g36"] = "grm_weapon_cam\\g36_shoot.anm",
+    ["wpn_gauss"] = "grm_weapon_cam\\owa_gauz_shoot.anm",
+    ["wpn_hpsa"] = "grm_weapon_cam\\owa_hsa_shoot.anm",
+    ["wpn_l85"] = "grm_weapon_cam\\owa_l85_shoot.anm",
+    ["wpn_mp5"] = "grm_weapon_cam\\mp5_shoot.anm",
+    ["wpn_pb"] = "grm_weapon_cam\\owa_92_shoot.anm",
+    ["wpn_pm"] = "grm_weapon_cam\\owa_92_shoot.anm",
+    ["wpn_sig220"] = "grm_weapon_cam\\owa_220_shoot.anm",
+    ["wpn_svd"] = "grm_weapon_cam\\owa_hand_svd_shoot.anm",
+    ["wpn_svu"] = "grm_weapon_cam\\owa_handsvu_shoot.anm",
+    ["wpn_usp"] = "grm_weapon_cam\\owa_ups_shoot.anm",
+    ["wpn_val"] = "grm_weapon_cam\\vss_shoot.anm",
+    ["wpn_vintorez"] = "grm_weapon_cam\\vss_shoot.anm",
+    ["wpn_walther"] = "grm_weapon_cam\\owa_wulter_shoot.anm",
+}
+local last_id, last_ammo, last_at = nil, nil, 0
+local disabled, warned = false, false
+local function clear_sample()
+    last_id, last_ammo = nil, nil
+end
+function reset()
+    pcall(function() level.remove_cam_effector(ID) end)
+    clear_sample()
+    last_at = 0
+    disabled, warned = false, false
+end
+local function blocked(actor)
+    if not actor or not actor:alive() or actor:is_talking() then return true end
+    if device().precache_frame > 0 or actor:has_info("disabled_ui") then return true end
+    if actor.health <= 0.20 then return true end
+    if shiza_hud_items and shiza_hud_items.is_using_item and shiza_hud_items.is_using_item() then return true end
+    if shiza_kill_stress and shiza_kill_stress.is_active and shiza_kill_stress.is_active() then return true end
+    if shiza_radiation and shiza_radiation.is_death_started and shiza_radiation.is_death_started() then return true end
+    if shiza_vodka and shiza_vodka.is_death_started and shiza_vodka.is_death_started() then return true end
+    return false
+end
+local function step(actor)
+    if disabled or blocked(actor) then clear_sample(); return end
+    local w = actor:active_item()
+    if not w then clear_sample(); return end
+    local path = paths[w:section()]
+    if not path then clear_sample(); return end
+    local id, ammo, now = w:id(), w:get_ammo_in_magazine(), time_global()
+    if type(ammo) ~= "number" then clear_sample(); return end
+    if last_id == id and last_ammo ~= nil and ammo < last_ammo and now - last_at >= MIN_INTERVAL then
+        last_at = now
+        level.add_cam_effector(path, ID, false, "")
+    end
+    last_id, last_ammo = id, ammo
+end
+function update(actor)
+    local ok, err = pcall(step, actor)
+    if not ok then
+        disabled = true; clear_sample()
+        if not warned then printf("[grm_shot_cam] disabled: %s", tostring(err)); warned = true end
+    end
+end

@@ -1,0 +1,197 @@
+-- Более широкое облако; источник следует перемещению актёра только во время выдоха.
+-- Диагностический настоящий свет; видимый спрайт пламени отключён.
+local ENABLE_IGNITION = true
+local IGNITION_TIME = 5800
+-- Частицы находятся в мире; это не недоступная в старом API привязка к HUD-кости.
+local STREAM = "shiza\\cig_exhale_stream"
+local CLOUD = "shiza\\cig_exhale_cloud"
+-- После отвода сигареты от рта; последний выдох после её выбрасывания.
+local EXHALE_TIMES = {11350, 18900, 34000, 35800}
+local MAX_LATENESS = 700
+local MAX_BURSTS = 3
+local epoch = 0
+local bursts = {}
+local function trace(text)
+    pcall(function() shiza_cig_diag.write("fx_"..tostring(text)) end)
+end
+trace("module loaded")
+local function vec(x,y,z) return vector():set(x,y,z) end
+local function point(b,forward,up)
+    return vec(b.origin.x+b.direction.x*forward+b.top.x*up,
+        b.origin.y+b.direction.y*forward+b.top.y*up,
+        b.origin.z+b.direction.z*forward+b.top.z*up)
+end
+local function stop_particle(ps)
+    if ps then pcall(function() ps:stop() end) end
+end
+local function stop_burst(b)
+    if b.stopped then return end
+    b.stopped=true
+    stop_particle(b.stream);stop_particle(b.cloud)
+    b.stream=nil;b.cloud=nil
+end
+local function forget(b)
+    for i=#bursts,1,-1 do
+        if bursts[i]==b then table.remove(bursts,i);return end
+    end
+end
+function reset()
+    shiza_cigarette_tip_smoke.reset()
+    epoch=epoch+1
+    for _,b in ipairs(bursts) do stop_burst(b) end
+    bursts={}
+    pcall(function() shiza_lighter_light.reset() end)
+end
+local function create(name,pos,velocity)
+    local ps=nil
+    local ok,err=pcall(function()
+        ps=particles_object(name)
+        ps:move_to(pos,velocity or vec(0,0,0))
+        ps:play_at_pos(pos)
+    end)
+    if not ok then
+        stop_particle(ps)
+        if type(printf)=="function" then printf("[cigarette_fx] %s",tostring(err)) end
+        return nil
+    end
+    return ps
+end
+function exhale()
+    local actor=db.actor
+    if not actor or not actor:alive() then return false end
+    local d=device()
+    if not d or not d.cam_pos or not d.cam_dir or not d.cam_top then return false end
+    while #bursts>=MAX_BURSTS do stop_burst(bursts[1]);table.remove(bursts,1) end
+    local b={token=epoch, actor_id=actor:id(), started=time_global(),
+        origin={x=d.cam_pos.x+d.cam_dir.x*.25-d.cam_top.x*.105,
+                y=d.cam_pos.y+d.cam_dir.y*.25-d.cam_top.y*.105,
+                z=d.cam_pos.z+d.cam_dir.z*.25-d.cam_top.z*.105},
+        direction={x=d.cam_dir.x,y=d.cam_dir.y,z=d.cam_dir.z},
+        top={x=d.cam_top.x,y=d.cam_top.y,z=d.cam_top.z}}
+    local ap=actor:position()
+    b.last_position={x=ap.x,y=ap.y,z=ap.z}
+    b.last_time=b.started
+    b.velocity=vec(0,0,0)
+    trace("exhale started")
+    b.stream=create(STREAM,point(b,0,0),b.velocity)
+    if not b.stream then return false end
+    table.insert(bursts,b)
+    level.add_call(
+        function()
+            if b.token~=epoch or b.stopped or not db.actor
+                or db.actor:id()~=b.actor_id or not db.actor:alive() then return true end
+            local age=time_global()-b.started
+            -- Компенсируем ходьбу по позиции актёра, а не дрожание камеры.
+            -- Старые частицы не телепортируем; новые наследуют скорость источника.
+            local now=time_global()
+            local ap=db.actor:position()
+            local dt=(now-b.last_time)/1000
+            if dt>0 then
+                local dx,dy,dz=ap.x-b.last_position.x,ap.y-b.last_position.y,ap.z-b.last_position.z
+                local speed=math.sqrt(dx*dx+dy*dy+dz*dz)/dt
+                -- При телепорте не растягиваем выдох через всю локацию.
+                if speed>12 or dt>.5 then return true end
+                b.origin.x=b.origin.x+dx
+                b.origin.y=b.origin.y+dy
+                b.origin.z=b.origin.z+dz
+                b.velocity=vec(dx/dt,dy/dt,dz/dt)
+                b.last_position={x=ap.x,y=ap.y,z=ap.z}
+                b.last_time=now
+            end
+            -- Новая струя следует за взглядом только во время выдоха.
+            -- Уже выпущенные частицы остаются рассеиваться в мире.
+            local camera=device()
+            if age<=1070 and camera and camera.cam_pos and camera.cam_dir and camera.cam_top then
+                local blend=1-math.exp(-math.max(0,dt)/0.055)
+                local function unit(x,y,z)
+                    local n=math.sqrt(x*x+y*y+z*z)
+                    if n<0.000001 then return nil end
+                    return {x=x/n,y=y/n,z=z/n}
+                end
+                local wanted=camera.cam_dir
+                local followed=unit(b.direction.x+(wanted.x-b.direction.x)*blend,
+                    b.direction.y+(wanted.y-b.direction.y)*blend,
+                    b.direction.z+(wanted.z-b.direction.z)*blend)
+                if followed then b.direction=followed end
+                local top=camera.cam_top
+                local dot=top.x*b.direction.x+top.y*b.direction.y+top.z*b.direction.z
+                local orthogonal=unit(top.x-b.direction.x*dot,top.y-b.direction.y*dot,top.z-b.direction.z*dot)
+                if orthogonal then b.top=orthogonal end
+                b.origin.x=camera.cam_pos.x+b.direction.x*.25-b.top.x*.105
+                b.origin.y=camera.cam_pos.y+b.direction.y*.25-b.top.y*.105
+                b.origin.z=camera.cam_pos.z+b.direction.z*.25-b.top.z*.105
+            end
+            if age<=500 then
+                local ok=pcall(function()
+                    b.stream:move_to(point(b,.22*age/500,0),b.velocity)
+                end)
+                if not ok then return true end
+            end
+            if age>=220 and not b.cloud_created then
+                b.cloud_created=true
+                b.cloud=create(CLOUD,point(b,.12,.005),b.velocity)
+            end
+            if b.cloud and age>=220 and age<=1070 then
+                local ok=pcall(function()
+                    b.cloud:move_to(point(b,.12+.12*(age-220)/850,.005),b.velocity)
+                end)
+                if not ok then return true end
+            end
+            return age>=3000
+        end,
+        function() stop_burst(b);forget(b) end)
+    return true
+end
+-- Точка настоящего света под ладонями; видимый спрайт пламени отключён.
+-- Это привязка к камере, НЕ к HUD-кости; отдельная пробная опция.
+local function ignition_point()
+    local d=device()
+    if not d or not d.cam_pos or not d.cam_dir or not d.cam_top then return nil end
+    local dir,top=d.cam_dir,d.cam_top
+    local rx=top.y*dir.z-top.z*dir.y
+    local ry=top.z*dir.x-top.x*dir.z
+    local rz=top.x*dir.y-top.y*dir.x
+    return vec(d.cam_pos.x+dir.x*.277-top.x*.145+rx*.003,
+        d.cam_pos.y+dir.y*.277-top.y*.145+ry*.003,
+        d.cam_pos.z+dir.z*.277-top.z*.145+rz*.003)
+end
+local function ignite()
+    if not ENABLE_IGNITION or not db.actor or not db.actor:alive() then return end
+    local pos=ignition_point()
+    trace("ignition event; position="..tostring(pos~=nil))
+    if pos then
+        local ok,result=pcall(function() return shiza_lighter_light.flash(pos,db.actor) end)
+        trace("light request ok="..tostring(ok).." result="..tostring(result))
+    end
+end
+
+function start(now)
+    trace("animation started; version=11")
+    return {started=now,next_event=1,final_done=false,ignition_done=false,tip=shiza_cigarette_tip_smoke.start(now)}
+end
+function update(use_state,now)
+    if not use_state then return end
+    shiza_cigarette_tip_smoke.update(use_state.tip,now)
+    local elapsed=now-use_state.started
+    if not use_state.ignition_done and elapsed>=IGNITION_TIME then
+        use_state.ignition_done=true
+        if elapsed-IGNITION_TIME<=MAX_LATENESS then ignite() end
+    end
+    local due=nil
+    local index=nil
+    while EXHALE_TIMES[use_state.next_event] and elapsed>=EXHALE_TIMES[use_state.next_event] do
+        index=use_state.next_event;due=EXHALE_TIMES[index]
+        use_state.next_event=use_state.next_event+1
+    end
+    if due and elapsed-due<=MAX_LATENESS then
+        local emitted=exhale()
+        if index==#EXHALE_TIMES and emitted then use_state.final_done=true end
+    end
+end
+function finish(use_state)
+    shiza_cigarette_tip_smoke.finish(use_state and use_state.tip)
+    -- При сильном зависании не теряем финальный выдох совсем.
+    if use_state and not use_state.final_done then
+        use_state.final_done=exhale()
+    end
+end

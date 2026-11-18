@@ -1,0 +1,41 @@
+
+/data/grm/current2026/bin.rar/bin/xrGame.dll:     file format pei-i386
+
+
+Disassembly of section .grm:
+
+1061f4d0 <.grm+0x4d0>:
+1061f4d0:	50                   	push   eax
+1061f4d1:	83 ff 02             	cmp    edi,0x2
+1061f4d4:	74 0b                	je     0x1061f4e1
+1061f4d6:	50                   	push   eax
+1061f4d7:	db 04 24             	fild   DWORD PTR [esp]
+1061f4da:	83 c4 04             	add    esp,0x4
+1061f4dd:	d9 1e                	fstp   DWORD PTR [esi]
+1061f4df:	eb 40                	jmp    0x1061f521
+1061f4e1:	6a 01                	push   0x1
+1061f4e3:	6a 00                	push   0x0
+1061f4e5:	50                   	push   eax
+1061f4e6:	89 e9                	mov    ecx,ebp
+1061f4e8:	ff 93 88 67 46 00    	call   DWORD PTR [ebx+0x466788]
+1061f4ee:	eb 2b                	jmp    0x1061f51b
+1061f4f0:	24 8b                	and    al,0x8b
+1061f4f2:	80 b0 00 00 00 85 c0 	xor    BYTE PTR [eax-0x7b000000],0xc0
+1061f4f9:	74 05                	je     0x1061f500
+1061f4fb:	83 c0 0c             	add    eax,0xc
+1061f4fe:	eb 06                	jmp    0x1061f506
+1061f500:	8d 83 9a f5 61 00    	lea    eax,[ebx+0x61f59a]
+1061f506:	ff 74 24 04          	push   DWORD PTR [esp+0x4]
+1061f50a:	50                   	push   eax
+1061f50b:	8d 83 78 f5 61 00    	lea    eax,[ebx+0x61f578]
+1061f511:	50                   	push   eax
+1061f512:	ff 93 74 6d 46 00    	call   DWORD PTR [ebx+0x466d74]
+1061f518:	83 c4 0c             	add    esp,0xc
+1061f51b:	c7 06 00 00 80 3f    	mov    DWORD PTR [esi],0x3f800000
+1061f521:	89 f0                	mov    eax,esi
+1061f523:	83 c4 08             	add    esp,0x8
+1061f526:	5d                   	pop    ebp
+1061f527:	5e                   	pop    esi
+1061f528:	5f                   	pop    edi
+1061f529:	5b                   	pop    ebx
+1061f52a:	c2 08 00             	ret    0x8

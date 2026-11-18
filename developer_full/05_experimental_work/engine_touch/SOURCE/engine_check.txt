@@ -1,0 +1,7 @@
+Checked base xrGame.dll SHA256 7526ad7042e1ad3eead1a89baf15d1ac7be1dcae71bc27db2b0f24010c690d45
+file 0x7285e 8b842418200000
+file 0x728b5 8b842418200000
+file 0x6038ee eb2b
+DLL RSDS GUID 724c6851-5c9e-40f9-bb95-fc13b75f7e67, age 22 (objdump output)
+PDB stream GUID same, age 1; not exact match.
+No byte patch is applied.

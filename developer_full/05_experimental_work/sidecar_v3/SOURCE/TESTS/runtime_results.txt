@@ -1,0 +1,4 @@
+PASS: 200 scalar records, dedupe, forget, disk round trip, corrupt/missing/oversized input, safe name, missing IO, level reset
+Syntax checked
+PASS: gore hide result records scalar snapshot; forget removes it (Lua mocks only)
+Syntax checked

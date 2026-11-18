@@ -1,0 +1,244 @@
+-- SHIZOPHRENIA LOST / Rotting corpses integration TEST1.
+-- Based on SkyLoader's Rotting corpses v2 FINAL for SoC 1.0006.
+-- Replaces unsafe full-world scans/packet parsing with bounded tracking.
+-- Public entry points are merged into the user's CURRENT binders.
+local PREFIX = "sl_rot1_"
+local records, locks = {}, {}
+local ready, attached, owner, next_tick, previous = false, false, nil, 0, nil
+local settings
+local MAX_TRACKED = 128
+local rotten = {sl_rot_body1=true,sl_rot_body2=true,sl_rot_body3=true}
+local skeleton = {sl_rot_bones1=true,sl_rot_bones2=true,sl_rot_bones3=true,sl_rot_bones4=true}
+local bodies = {"sl_rot_body1","sl_rot_body2","sl_rot_body3"}
+local bones = {"sl_rot_bones1","sl_rot_bones2","sl_rot_bones3","sl_rot_bones4"}
+local function actor_store()
+    local a=db and db.actor
+    if not a or not db.storage or not db.storage[a:id()] then return nil end
+    local st=db.storage[a:id()]
+    if not st.pstor then st.pstor={} end
+    return st.pstor
+end
+local function read_settings()
+    if settings then return end
+    local ini=system_ini()
+    settings={enabled=ini:r_float("sl_rotting_settings","enabled")==1,
+        first=math.max(1,ini:r_float("sl_rotting_settings","first_time"))*60,
+        second=math.max(1,ini:r_float("sl_rotting_settings","second_time"))*60,
+        third=math.max(1,ini:r_float("sl_rotting_settings","skeleton_time"))*60,
+        distance=math.max(15,ini:r_float("sl_rotting_settings","replace_distance"))}
+end
+local function encode(s)
+    return (s:gsub("([^%w_%-%.])",function(c) return string.format("%%%02X",string.byte(c)) end))
+end
+local function decode(s)
+    return (s:gsub("%%(%x%x)",function(c) return string.char(tonumber(c,16)) end))
+end
+local function save_record(id,r)
+    local st=actor_store()
+    if st then st[PREFIX..id]=r and (r.stage.."|"..string.format("%.3f",r.left).."|"..encode(r.name).."|"..encode(r.section)) or nil end
+end
+function reset()
+    records={};locks={};ready=false;attached=false;owner=nil;next_tick=0;previous=nil
+end
+local function initialize()
+    if not attached then return false end
+    local st=actor_store()
+    if not st then return false end
+    local a=db.actor
+    if ready and owner==a then return true end
+    records={};locks={};owner=a;ready=true;previous=time_global();next_tick=previous+5000
+    local count=0
+    for key,value in pairs(st) do
+        local id=type(key)=="string" and tonumber(key:match("^sl_rot1_(%d+)$"))
+        if id and type(value)=="string" then
+            local stage,left,name,section=value:match("^(%d+)|([%d%.%-]+)|([^|]*)|([^|]*)$")
+            stage=tonumber(stage);left=tonumber(left)
+            if stage and stage>=1 and stage<=3 and left and count<MAX_TRACKED then
+                records[id]={stage=stage,left=math.max(0,left),name=decode(name),section=decode(section)};count=count+1
+            end
+        end
+    end
+    read_settings()
+    return true
+end
+function on_actor_ready()
+    reset();attached=true
+    initialize()
+end
+local function matches(obj,r)
+    return obj and obj:name()==r.name and obj:section()==r.section
+end
+function is_rotten(obj)
+    return obj and rotten[obj:section()]==true
+end
+function is_remains(obj)
+    return obj and (rotten[obj:section()]==true or skeleton[obj:section()]==true)
+end
+local function valid_story(id)
+    return id~=nil and id~=-1 and id~=4294967295 and id~=4294967296
+end
+local function eligible(obj)
+    if not obj or not IsStalker(obj) or obj:alive() or obj:section()=="m_trader" then return false end
+    local ok,allowed=pcall(function()
+        if valid_story(obj:story_id()) then return false end
+        local ini=obj:spawn_ini()
+        if ini and (ini:section_exist("known_info") or ini:section_exist("dont_spawn_online")) then return false end
+        if obj:name()=="esc_wolf" then return false end
+        return true
+    end)
+    -- Missing/unsupported quest-safety information means KEEP the corpse.
+    return ok and allowed
+end
+local function add(obj,stage,seconds)
+    if not initialize() then return false end
+    if not settings.enabled then return true end
+    local id=obj:id();local old=records[id]
+    if old and matches(obj,old) then return true end
+    local count=0;for _ in pairs(records) do count=count+1 end
+    if count>=MAX_TRACKED then return true end -- Leave excess corpses alone; no per-frame retry storm.
+    records[id]={stage=stage,left=seconds,name=obj:name(),section=obj:section()}
+    save_record(id,records[id]);return true
+end
+-- Return true once handled, so each binder checks only until actor pstor is ready.
+function observe_npc(obj)
+    if not initialize() then return false end
+    if not eligible(obj) then return true end
+    return add(obj,1,settings.first)
+end
+function observe_remains(obj)
+    if not initialize() then return false end
+    if not is_remains(obj) then return true end
+    return add(obj,is_rotten(obj) and 2 or 3,is_rotten(obj) and settings.second or settings.third)
+end
+function begin_harvest(obj)
+    if not obj then return end
+    initialize()
+    locks[obj:id()]={name=obj:name(),until_time=time_global()+15000}
+end
+function forget(obj)
+    if not obj then return end
+    local id=obj:id();records[id]=nil;locks[id]=nil;save_record(id,nil)
+end
+local function locked(id,r,now)
+    local lock=locks[id]
+    if not lock then return false end
+    if lock.name~=r.name or now>=lock.until_time then locks[id]=nil;return false end
+    return true
+end
+local function has_quest_items(obj)
+    local ini=system_ini()
+    for i=0,obj:object_count()-1 do
+        local item=obj:object(i)
+        if item and ini:line_exist(item:section(),"quest_item") and ini:r_bool(item:section(),"quest_item") then return true end
+    end
+    return false
+end
+local function release_created(id)
+    local server=alife():object(id)
+    if server then alife():release(server,true) end
+end
+local function convert(id,r,obj,server)
+    if r.stage==1 then
+        if not eligible(obj) or has_quest_items(obj) then
+            records[id]=nil;save_record(id,nil);return false
+        end
+    end
+    if r.stage==3 then
+        pcall(function() grm_gore_test.forget(id) end)
+        alife():release(server,true);records[id]=nil;save_record(id,nil);return true
+    end
+    local list=r.stage==1 and bodies or bones
+    local new=alife():create(list[math.random(#list)],obj:position(),obj:level_vertex_id(),obj:game_vertex_id())
+    if not new then return false end
+    -- Copy references before dropping; do not mutate a forward inventory index loop.
+    if r.stage==1 then
+        local items={}
+        for i=0,obj:object_count()-1 do
+            local item=obj:object(i)
+            if item and item:section()~="bolt" then items[#items+1]=item end
+        end
+        local ok=pcall(function() for _,item in ipairs(items) do obj:drop_item(item) end end)
+        if not ok then release_created(new.id);return false end
+        -- If transfer is deferred/failed, KEEP original NPC rather than delete loot.
+        for i=0,obj:object_count()-1 do
+            local item=obj:object(i)
+            if item and item:section()~="bolt" then release_created(new.id);return false end
+        end
+    end
+    local newname=new:name();local newsection=new:section_name()
+    local next_stage=r.stage+1
+    pcall(function() grm_gore_test.forget(id) end)
+    alife():release(server,true)
+    records[id]=nil;locks[id]=nil;save_record(id,nil)
+    records[new.id]={stage=next_stage,left=next_stage==2 and settings.second or settings.third,name=newname,section=newsection}
+    save_record(new.id,records[new.id]);return true
+end
+function update()
+    if not initialize() or not settings.enabled then return end
+    local a=db.actor
+    if not a:alive() then return end
+    local now=time_global()
+    if previous and now<previous then previous=now;next_tick=now+5000 end
+    if now<next_tick then return end
+    local elapsed=math.max(0,(now-(previous or now))/1000)
+    previous=now;next_tick=now+5000
+    local ids={};for id in pairs(records) do ids[#ids+1]=id end
+    table.sort(ids)
+    local changed=false
+    for _,id in ipairs(ids) do
+        local r=records[id]
+        if r then
+            local server=alife():object(id)
+            local compatible=server and server:name()==r.name and server:section_name()==r.section
+            if not compatible then records[id]=nil;locks[id]=nil;save_record(id,nil)
+            else
+                r.left=math.max(0,r.left-elapsed);save_record(id,r)
+                -- Track offline time but never release an offline NPC and its inventory.
+                local obj=level.object_by_id(id)
+                if not changed and obj and matches(obj,r) and r.left<=0 and not locked(id,r,now) then
+                    local distant=obj:position():distance_to(a:position())>settings.distance
+                    if distant then changed=convert(id,r,obj,server) end
+                end
+            end
+        end
+    end
+end
+-- Dedicated binder only for NEW sections: existing physics/harvest binder unchanged.
+function bind(obj)
+    obj:bind_object(remains_binder(obj))
+end
+class "remains_binder" (object_binder)
+function remains_binder:__init(obj) super(obj)
+    self.rot_registered=false
+end
+function remains_binder:reinit()
+    object_binder.reinit(self)
+    db.storage[self.object:id()]={}
+end
+function remains_binder:net_spawn(server)
+    if not object_binder.net_spawn(self,server) then return false end
+    db.storage[self.object:id()]=db.storage[self.object:id()] or {}
+    self.object:set_nonscript_usable(false)
+    if is_rotten(self.object) then
+        -- Same physical-shell activation used by the 1.0006 FINAL original.
+        pcall(function()
+            local h=hit();h.draftsman=self.object;h.type=hit.fire_wound
+            h.direction=vector():set(0,0,0);h:bone("torso");h.power=1;h.impulse=1
+            self.object:hit(h)
+        end)
+    end
+    self.rot_registered=observe_remains(self.object)
+    return true
+end
+function remains_binder:update(delta)
+    object_binder.update(self,delta)
+    if not self.rot_registered then self.rot_registered=observe_remains(self.object) end
+end
+function remains_binder:net_destroy()
+    -- DO NOT forget here: net_destroy is also an ordinary online -> offline switch.
+    if db.storage then db.storage[self.object:id()]=nil end
+    object_binder.net_destroy(self)
+end
+function remains_binder:net_save_relevant() return true end
+function remains_binder:save(packet) object_binder.save(self,packet) end
+function remains_binder:load(reader) object_binder.load(self,reader) end

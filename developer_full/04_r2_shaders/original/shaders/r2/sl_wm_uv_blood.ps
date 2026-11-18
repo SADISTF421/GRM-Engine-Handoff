@@ -1,0 +1,22 @@
+// TEST2: use texture alpha as coverage under 2x multiplicative blending.
+// DDS files are unchanged. If the texture alpha is fully opaque, this
+// cannot recover a missing silhouette and is not a geometry fix.
+uniform sampler2D s_base;
+struct pin
+{
+    float2 uv : TEXCOORD0;
+    float4 color : COLOR0;
+};
+float4 main(pin I) : COLOR
+{
+    float edge = min(min(I.uv.x, I.uv.y), min(1.0-I.uv.x, 1.0-I.uv.y));
+    clip(edge);
+    float4 C = tex2D(s_base, I.uv);
+    // Reject only essentially zero alpha; keep translucent edge pixels.
+    clip(C.a - (0.5/255.0));
+    float coverage = saturate(C.a) * saturate(edge * 32.0);
+    coverage *= 1.0 - saturate(I.color.a);
+    // 0.5 is neutral for dstcolor/srccolor blend; zero coverage must not darken cloth.
+    C.rgb = lerp(float3(0.5, 0.5, 0.5), C.rgb, coverage);
+    return float4(C.rgb, 1.0);
+}

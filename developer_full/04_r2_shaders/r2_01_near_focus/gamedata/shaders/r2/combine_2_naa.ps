@@ -1,0 +1,154 @@
+#include "common.h"
+#include "mblur.h"
+#include "grm_mood_grade.h"
+#include "grm_foreground_glitch.h"
+#include "grm_near_focus_test.h"
+
+struct 	v2p
+{
+  float4 tc0: 		TEXCOORD0;	// Center
+  float4 tc1: 		TEXCOORD1;	// LT 		 
+  float4 tc2: 		TEXCOORD2;	// RB
+  float4 tc3: 		TEXCOORD3;	// RT 
+  float4 tc4: 		TEXCOORD4;	// LB
+  float4 tc5:		TEXCOORD5;	// Left	/ Right	
+  float4 tc6:		TEXCOORD6;	// Top  / Bottom 
+};
+
+//////////////////////////////////////////////////////////////////////////////////////////
+uniform sampler2D 	s_distort;
+uniform half4 		e_barrier;	// x=norm(.8f), y=depth(.1f), z=clr
+uniform half4 		e_weights;	// x=norm, y=depth, z=clr
+uniform half4 		e_kernel;	// x=norm, y=depth, z=clr
+uniform float4 		c_screen;
+
+
+// R2 spatial luminance sharpening, inspired by SSS 23.5 TAA sharpening.
+// Uses only the already bound scene image; not TAA and not a ReShade pass.
+half3 grm_ssfx_sharp(half3 scene, float2 uv, float2 center_uv, float3 position_eye)
+{
+    float2 pixel = max(float2(abs(ddx(uv.x)), abs(ddy(uv.y))), float2(0.000001f, 0.000001f));
+    float2 d = 0.5f * pixel;
+    float2 uv_min = pixel * 0.5f;
+    float2 uv_max = 1.0f - uv_min;
+    half3 center_rgb = tex2D(s_image, clamp(center_uv, uv_min, uv_max)).rgb;
+    half3 c0 = tex2D(s_image, clamp(center_uv + float2(-d.x,-d.y), uv_min, uv_max)).rgb;
+    half3 c1 = tex2D(s_image, clamp(center_uv + float2( d.x,-d.y), uv_min, uv_max)).rgb;
+    half3 c2 = tex2D(s_image, clamp(center_uv + float2(-d.x, d.y), uv_min, uv_max)).rgb;
+    half3 c3 = tex2D(s_image, clamp(center_uv + float2( d.x, d.y), uv_min, uv_max)).rgb;
+    half3 luma = half3(0.2126h, 0.7152h, 0.0722h);
+    half center_luma = dot(center_rgb, luma);
+    half blur_luma = dot((c0+c1+c2+c3)*0.25h, luma);
+    half low = min(min(dot(c0,luma),dot(c1,luma)), min(dot(c2,luma),dot(c3,luma)));
+    half high = max(max(dot(c0,luma),dot(c1,luma)), max(dot(c2,luma),dot(c3,luma)));
+    float contour = 1.0f - smoothstep(0.16f,0.45f,(float)(high-low));
+    float texture_signal = smoothstep(0.004f,0.018f,abs((float)(center_luma-blur_luma)));
+    float depth = length(position_eye);
+    float geometry = smoothstep(0.02f,0.12f,position_eye.z);
+    float native_fog = saturate(depth*fog_params.w + fog_params.x);
+    float fog_limit = 1.0f - 0.75f*smoothstep(0.20f,0.85f,native_fog);
+    // Preserve the carefully tuned Darkscape: no enhancement of its fog or grain.
+    float grm_dark_alpha = 1.0f-smoothstep(0.015f,0.040f,abs((float)L_hemi_color.w-1.25f));
+    float grm_g = max((float)fog_color.g,0.001f);
+    float grm_ratio = max(abs((float)fog_color.r/grm_g-0.98f),abs((float)fog_color.b/grm_g-1.02f));
+    float grm_far = (1.0f-fog_params.x)/max(fog_params.w,0.00001f);
+    float grm_range = smoothstep(40.0f,48.0f,grm_far)*(1.0f-smoothstep(62.0f,70.0f,grm_far));
+    float grm_dark = saturate(max(grm_dark_alpha,(1.0f-smoothstep(0.008f,0.020f,grm_ratio))*grm_range));
+    half amount = (half)(0.50f * contour * texture_signal * geometry * fog_limit * (1.0f-grm_dark));
+    half delta = clamp((center_luma-blur_luma)*amount, -0.028h, 0.028h);
+    return max(scene + half3(delta,delta,delta), half3(0.h,0.h,0.h));
+}
+
+// Пробное экранное отражение: основание лужи остаётся видимым.
+// За пределами кадра данных нет; на краях отражение плавно исчезает.
+half3 grm_puddle_reflection(half3 base_color, float2 uv, float3 pos, half3 tagged_normal)
+{
+    float normal_length = length((float3)tagged_normal);
+    float pool = saturate((normal_length - 1.0025f) / 0.0275f);
+    if (pool > 0.01f && ((L_hemi_color.w >= 5.5f ? L_hemi_color.w - 4.0f : L_hemi_color.w) > 2.01f) && pos.z > 0.1f)
+    {
+        float3 n = (float3)tagged_normal / max(normal_length, 0.0001f);
+        float3 world_n = mul(n, (float3x3)m_V);
+        float flat = smoothstep(0.91f, 0.98f, world_n.y);
+        // Длину и направление считаем один раз для отражения и затухания.
+        float grm_pos_length = length(pos);
+        float3 grm_view_dir = pos / grm_pos_length;
+        float3 ray = reflect(grm_view_dir, n);
+        float4 projected = mul(m_P, float4(ray, 0.0f));
+        if (projected.w > 0.001f && flat > 0.0f)
+        {
+            float2 reflected_uv = float2(0.5f + 0.5f * projected.x / projected.w,
+                                         0.5f - 0.5f * projected.y / projected.w);
+            // При зуме берём доступное изображение ближе к центру кадра.
+            // Это приближение: объекты за экраном восстановить нельзя.
+            float grm_zoom_fix = min(1.0f, 1.5f / max(abs(m_P[1][1]), 0.001f));
+            reflected_uv = 0.5f + (reflected_uv - 0.5f) * grm_zoom_fix;
+            float ripple = sin(timers.x * 1.5f + pos.x * 2.0f + pos.z * 0.8f);
+            reflected_uv += float2(ripple, -ripple) * 0.0012f;
+            float edge = smoothstep(0.0f, 0.06f, min(min(reflected_uv.x, 1.0f - reflected_uv.x),
+                                                       min(reflected_uv.y, 1.0f - reflected_uv.y)));
+            half3 reflected = tex2Dlod(s_image, float4(saturate(reflected_uv), 0.0f, 0.0f)).rgb;
+            float grazing = 1.0f - saturate(abs(dot(n, grm_view_dir)));
+            float distance_fade = 1.0f - smoothstep(35.0f, 70.0f, grm_pos_length);
+            float amount = pool * flat * edge * distance_fade * (0.22f + 0.33f * grazing);
+            base_color = lerp(base_color, reflected, (half)amount);
+        }
+    }
+    return base_color;
+}
+
+// Subtle periodic ghosting of near geometry in Darkscape weather.
+// Depth is an approximation: nearby world objects can also be affected.
+half3 grm_darkscape_ghost(half3 scene, float2 uv, float2 image_uv)
+{
+    float tag_alpha = 1.0f - smoothstep(0.015f, 0.040f, abs((float)L_hemi_color.w - 1.25f));
+    float3 delta = abs((float3)fog_color.rgb - float3(0.245f, 0.250f, 0.255f));
+    float err = max(delta.r, max(delta.g, delta.b));
+    float tag_fog = 1.0f - smoothstep(0.004f, 0.012f, err);
+    float tag = saturate(max(tag_alpha, tag_fog));
+
+    // Sample both color and depth at the shifted source, so the ghost can
+    // extend beyond the weapon silhouette instead of only tinting the weapon.
+    float2 ghost_uv = image_uv - float2(0.010f, 0.002f);
+    float valid = step(0.0f, ghost_uv.x) * step(ghost_uv.x, 1.0f)
+                * step(0.0f, ghost_uv.y) * step(ghost_uv.y, 1.0f);
+    float2 sample_uv = saturate(ghost_uv);
+    float dist = length(tex2D(s_position, sample_uv).xyz);
+    float depth_mask = smoothstep(0.015f, 0.08f, dist) * (1.0f - smoothstep(0.65f, 1.50f, dist));
+    float lower = smoothstep(0.32f, 0.52f, uv.y);
+    float pulse = 0.30f + 0.10f * sin(timers.x * 0.8f);
+    half3 ghost = tex2D(s_image, sample_uv).rgb;
+    return lerp(scene, ghost, (half)(tag * valid * depth_mask * lower * pulse));
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////
+// Pixel
+half4 	main		( v2p I )	: COLOR
+{
+#ifdef 	USE_DISTORT
+	half4 	distort	= tex2D		(s_distort, I.tc0);
+	half2	offset	= (distort.xy-.5h)*def_distort;
+	float2	center	= I.tc0 + offset;
+#else
+	float2	center 	= I.tc0;
+#endif
+
+	half3 	img 	= tex2D		(s_image, center);
+//	half3 	bloom	= tex2D		(s_bloom, center);
+	half4 	bloom	= tex2D		(s_bloom, center);
+
+	float3 grm_pos = tex2D(s_position, I.tc0).xyz;
+	img.rgb 	= mblur		(center,grm_pos,img.rgb);
+	img.rgb = grm_near_focus(img.rgb, I.tc0.xy, center, grm_pos);
+	img.rgb = grm_ssfx_sharp(img.rgb, I.tc0.xy, center, grm_pos);
+	img.rgb = grm_puddle_reflection(img.rgb, I.tc0.xy, grm_pos, tex2D(s_normal, I.tc0).xyz);
+
+
+
+
+	img.rgb = grm_darkscape_ghost(img.rgb, I.tc0.xy, center);
+	img.rgb = grm_foreground_glitch(img.rgb, I.tc0.xy, center, grm_pos);
+	img.rgb = grm_metal_interference(img.rgb, I.tc0.xy, grm_pos);
+	return 	grm_mood_grade(combine_bloom(img,bloom));
+
+}

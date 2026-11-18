@@ -1,0 +1,28 @@
+--- current/xr_motivator.script
++++ test/xr_motivator.script
+@@ -246,9 +246,7 @@
+ 		xr_logic.issue_event(self.object, self.st.hit, "hit_callback", obj, amount, local_direction, who, bone_index)
+ 	end
+ 	if amount > 0 then
+-		printf("HIT_CALLBACK: %s amount=%s bone=%s", obj:name(), amount, tostring(bone_index))
+ 		local is_head, head_id = shiza_gore_on_hit(self.object, bone_index)
+-		printf("[GORE_DIAG] hit id=%s bone=%s head_id=%s is_head=%s amount=%s", tostring(self.object:id()), tostring(bone_index), tostring(head_id), tostring(is_head), tostring(amount))
+ 		if self.st then
+ 			if is_head then
+ 				local attacker_id = nil
+@@ -279,7 +277,6 @@
+ 		local who_ok, value = pcall(function() return who:id() end)
+ 		if who_ok then death_who_id = tonumber(value) end
+ 	end
+-	printf("[GORE_DIAG] death id=%s killer=%s", tostring(self.object:id()), tostring(death_who_id))
+ 	local last_head_hit = self.st and self.st.shiza_gore_last_head_hit
+ 	if last_head_hit then
+ 		local killer_id = nil
+@@ -290,7 +287,6 @@
+ 		if last_head_hit.who_id ~= nil and killer_id == last_head_hit.who_id and time_global() - last_head_hit.time <= SHIZA_GORE_DEATH_WINDOW then
+ 			-- Старое скрытие кости отключено: видимость обрабатывает отдельный рендер-тест.
+ 		else
+-			printf("[GORE_DIAG] смерть не совпала с недавним попаданием в голову id=%s", tostring(self.object:id()))
+ 		end
+ 		self.st.shiza_gore_last_head_hit = nil
+ 	end

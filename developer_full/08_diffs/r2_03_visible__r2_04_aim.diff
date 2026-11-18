@@ -1,0 +1,13 @@
+--- /data/grm_transfer_stage/02_versions/r2_03_visible/gamedata/shaders/r2/grm_near_focus_test.h
++++ /data/grm_transfer_stage/02_versions/r2_04_aim/gamedata/shaders/r2/grm_near_focus_test.h
+@@ -7,6 +7,10 @@
+     float2 focus_uv = uv * 0.0001f + float2(0.49995f, 0.49995f);
+     float focus = tex2D(s_position, focus_uv).z;
+     float activation = smoothstep(0.15f, 0.30f, focus) * (1.0f - smoothstep(1.20f, 2.00f, focus));
++    // При приближении проекции плавно отключаем эффект, не изменяя FOV.
++    // Это оценка увеличения, а не достоверный флаг прицеливания.
++    float projection_scale = abs(m_P[1][1]);
++    activation *= 1.0f - smoothstep(1.54f, 1.65f, projection_scale);
+     float far_mask = smoothstep(focus + 0.30f, focus + 1.20f, position_eye.z);
+     float2 pixel = max(float2(abs(ddx(uv.x)), abs(ddy(uv.y))), float2(0.000001f, 0.000001f));
+     float2 delta = pixel * 4.0f;

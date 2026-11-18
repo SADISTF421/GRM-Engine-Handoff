@@ -1,0 +1,266 @@
+-- # Таблица секций НПС, для которых запрещён суицид
+local SUICIDE_RESTRICTED_SECTIONS = { 
+	["esc_novice_attacker1"] = true,
+	["esc_novice_attacker2"] = true,
+	["esc_novice_attacker3"] = true,
+}
+
+-- # Шанс активации схемы суицида при соответствующих условиях [1; 100]
+local SUICIDE_ACTIVATE_CHANCE = 50
+
+-- # Минимальный уровень здоровья, ниже которого запускается схема [0.01; 1]
+local SUICIDE_MIN_HEALTH = 0.5 
+
+-- Particle burst is requested after the observed magazine count decreases.
+local function shiza_suicide_burst(npc)
+    local pos
+    -- Ask for the head position directly: get_bone_id may not be exported.
+    local pos_ok, head_pos = pcall(function() return npc:bone_position("bip01_head") end)
+    if pos_ok and head_pos then
+        pos = vector():set(head_pos.x, head_pos.y + 0.10, head_pos.z)
+        if type(printf) == "function" then pcall(printf, "[GRM_SUICIDE] position=head") end
+    end
+    -- Approximate fallback only; exact height varies by NPC model and pose.
+    if not pos then
+        local base_ok, base = pcall(function() return npc:position() end)
+        if base_ok and base then
+            pos = vector():set(base.x, base.y + 1.5, base.z)
+            if type(printf) == "function" then pcall(printf, "[GRM_SUICIDE] position=fallback") end
+        end
+    end
+    if not pos then
+        if type(printf) == "function" then pcall(printf, "[GRM_SUICIDE] no position") end
+        return
+    end
+    local played, err = pcall(function() particles_object("grm_restore\\suicide_backup_head"):play_at_pos(pos) end)
+    if type(printf) == "function" then
+        pcall(printf, "[GRM_SUICIDE] particle call %s", played and "ok" or tostring(err))
+    end
+end
+
+-- Пытаемся скрыть голову после смерти, не удаляя труп и предметы.
+local function shiza_hide_suicide_head_after_death(npc)
+    local ok, id, name, map = pcall(function() return npc:id(), npc:name(), level.name() end)
+    if not ok or not id or not name or not map then return end
+    local deadline = time_global() + 4000
+    local function ready()
+        local passed, result = pcall(function()
+            if level.name() ~= map or time_global() >= deadline then return true end
+            local corpse = level.object_by_id(id)
+            return corpse and corpse:name() == name and not corpse:alive() or false
+        end)
+        return not passed or result
+    end
+    local function finish()
+        pcall(function()
+            if level.name() ~= map or time_global() >= deadline then return end
+            local corpse = level.object_by_id(id)
+            if not corpse or corpse:name() ~= name or corpse:alive() then return end
+            local bone_ok, bone_id = pcall(function() return corpse:get_bone_id("bip01_head") end)
+            bone_id = bone_ok and tonumber(bone_id) or nil
+            if not bone_id or bone_id < 0 or bone_id >= 65535 then return end
+            -- В некоторых сборках эта функция не экспортирована: ошибка не мешает игре.
+            pcall(function() corpse:set_bone_visible("bip01_head", false, true) end)
+        end)
+    end
+    pcall(function() level.add_call(ready, finish) end)
+end
+
+
+-- Observe ammunition from the suicide action itself, without a timer or scheduler.
+local function shiza_observe_suicide_shot(self)
+    if self.shiza_suicide_effect_started or not self.shiza_weapon_id then return end
+    local ok, id, ammo = pcall(function()
+        local weapon = self.object:active_item()
+        if not weapon then return nil, nil end
+        return weapon:id(), weapon:get_ammo_in_magazine()
+    end)
+    if not ok or id ~= self.shiza_weapon_id or type(ammo) ~= "number" then return end
+    if ammo < self.shiza_ammo_before then
+        self.shiza_suicide_effect_started = true
+        if type(printf) == "function" then pcall(printf, "[GRM_SUICIDE] ammo decreased %s -> %s", tostring(self.shiza_ammo_before), tostring(ammo)) end
+        shiza_suicide_burst(self.object)
+        shiza_hide_suicide_head_after_death(self.object)
+    end
+end
+
+class "evaluator_suicide" (property_evaluator)
+
+function evaluator_suicide:__init(name, storage) super (nil, name)
+	self.a = storage
+end
+
+function evaluator_suicide:evaluate()
+	-- # Для работы схемы у нас должна быть:
+	-- # 1) включена сама схема
+	-- # 2) оружие в руках
+	-- # 3) низкий уровень здоровья
+	return self.a.enabled and self.object:weapon_unstrapped() and		
+		self.object:active_item() ~= nil and 
+		self.object:best_weapon() ~= nil and
+		self.object:active_item():id() == self.object:best_weapon():id() and 
+		self.object.health < SUICIDE_MIN_HEALTH
+end
+
+class "action_suicide" (action_base)
+function action_suicide:__init (npc_name,action_name, storage, char_ini) super (nil, action_name)
+	self.a = storage
+end
+
+function action_suicide:initialize()
+	action_base.initialize(self)
+	
+	--news_manager.send_tip(db.actor, ""..self.object:name(), 0, "stalker", 0)
+	
+	-- # Вроде и без этого нормально работает. По-идее тут оффаем xr_meet и xr_wounded
+	--[[
+	local manager = self.object:motivation_action_manager()
+	
+	--manager:remove_evaluator(xr_evaluators_id.sidor_wounded_base)
+	--manager:add_evaluator(xr_evaluators_id.sidor_wounded_base, property_evaluator_const(false))
+	
+	--manager:remove_evaluator(xr_evaluators_id.stohe_meet_base + 1)
+	--manager:add_evaluator(xr_evaluators_id.stohe_meet_base + 1, property_evaluator_const(false))
+	--]]
+	
+	-- Сбрасываем состояние НПС
+	self.object:clear_animations()
+	self.object:set_desired_position()
+	self.object:set_desired_direction()
+	
+	-- Добавляем в лист отыгрыша полный анимсет РКН'а
+	self.object:add_animation("kamikadze_slot2", true, false)
+	self.object:add_animation("kamikadze_slot_2_hold", true, false)
+	
+	-- Сейвим текущее направление, куда должен смотреть НПС
+	self.look_pt = vector():sub(db.actor:position(), self.object:position())
+	
+	-- Оффаем стрельбу, если она прям щас ведётся по кому-то
+	self.object:set_item(object.idle, self.object:active_item())
+	
+	-- [TODO] Нужен бубнеж в начале схемы?
+	--xr_sound.set_sound_play(self.object, "use_abuse")
+	
+	-- Взводим первый таймер (1/2 - визуальный выстрел)
+	self.expiration_time = time_global() + 3500
+	self.need_to_die = false
+	self.shiza_suicide_effect_started = false
+	self.shiza_weapon_id = nil
+	self.shiza_ammo_before = nil
+end
+
+function action_suicide:execute()
+	action_base.execute(self)
+	
+	-- Костыль: не даём другим схемам передвинуть НПС
+	self.object:movement_enabled(false)
+	self.object:set_sight(look.direction, self.look_pt, 0)
+	
+	-- Тож костыль, чтобы НПС случайно не оказался в object.idle после срабатывания первого таймера
+	if self.need_to_die then
+		shiza_observe_suicide_shot(self)
+		self.object:set_item(object.fire1, self.object:active_item())
+		shiza_observe_suicide_shot(self)
+	end
+	
+	if time_global() >= self.expiration_time then
+		-- Сработал таймер 2/2 (физ. хит в НПС)
+		if self.need_to_die then
+			local h = hit()
+			h.power = 100
+			h.direction = vector_rotate_y(self.object:direction(), 90)
+			h.draftsman = self.object
+			h.impulse = 0
+			h.type = hit.wound
+			self.object:hit(h)
+		-- Сработал таймер 1/2 (визуальный выстрел)
+		else
+			-- Если нечем стрелять - подспавниваем патрон в оружие
+			if self.object:active_item():get_ammo_in_magazine() < 1 then
+				self.object:active_item():set_ammo_elapsed(1)
+			end
+			
+			-- Save the active weapon and magazine count before the shooting command.
+			local weapon = self.object:active_item()
+			local ok, weapon_id, ammo = pcall(function() return weapon:id(), weapon:get_ammo_in_magazine() end)
+			if ok and type(ammo) == "number" then
+				self.shiza_weapon_id, self.shiza_ammo_before = weapon_id, ammo
+				if type(printf) == "function" then pcall(printf, "[GRM_SUICIDE] fire command weapon=%s ammo=%s", tostring(weapon_id), tostring(ammo)) end
+			else
+				if type(printf) == "function" then pcall(printf, "[GRM_SUICIDE] cannot read weapon/ammo") end
+			end
+			self.object:set_item(object.fire1, weapon)
+			shiza_observe_suicide_shot(self)
+		
+			-- Взводим таймер 2/2 (физ. хит в НПС)
+			self.expiration_time = time_global() + 500
+			self.need_to_die = true
+		end
+	end
+end
+
+function action_suicide:finalize()
+    if self.shiza_weapon_id and not self.shiza_suicide_effect_started and type(printf) == "function" then
+        pcall(printf, "[GRM_SUICIDE] finished without observed ammo decrease")
+    end
+	action_base.finalize(self)
+end
+
+function add_to_binder(npc, char_ini, scheme, section, st)
+	local manager = npc:motivation_action_manager()
+	
+	manager:add_evaluator(xr_evaluators_id.suicide_base, evaluator_suicide("evaluator_suicide", st))
+	
+	local action = action_suicide(npc:name(), "action_suicide", st, char_ini)
+	
+	action:add_precondition(world_property(stalker_ids.property_alive, true))
+	action:add_precondition(world_property(xr_evaluators_id.suicide_base, true))
+	action:add_precondition(world_property(stalker_ids.property_enemy, true))
+	
+	action:add_effect(world_property(xr_evaluators_id.suicide_base, false))
+	action:add_effect(world_property(stalker_ids.property_enemy, false))
+    action:add_effect(world_property(stalker_ids.property_danger, false))
+	
+	manager:add_action(xr_actions_id.suicide_base, action)
+
+	action = manager:action(xr_actions_id.alife)
+	action:add_precondition(world_property(xr_evaluators_id.suicide_base, false))
+	
+    action = manager:action(stalker_ids.action_combat_planner)
+	action:add_precondition(world_property(xr_evaluators_id.suicide_base, false))
+	
+    action = manager:action(stalker_ids.action_anomaly_planner)
+	action:add_precondition(world_property(xr_evaluators_id.suicide_base, false))
+	
+	action = manager:action(stalker_ids.action_danger_planner)
+	action:add_precondition(world_property(xr_evaluators_id.suicide_base, false))
+	
+	action = manager:action(stalker_ids.action_gather_items)
+	action:add_precondition(world_property(xr_evaluators_id.suicide_base, false))
+end
+
+function get_chance(n)
+	if n < 1 then
+		return false
+	end
+		
+    return math.random(1, 100) <= n
+end
+
+function set_scheme(npc, ini, scheme, section)
+	local st = xr_logic.assign_storage_and_bind(npc, ini, scheme, section)
+	if st then
+		if SUICIDE_RESTRICTED_SECTIONS[npc:name()] then
+			st.enabled = false
+		else
+			st.enabled = get_chance(SUICIDE_ACTIVATE_CHANCE)
+		end
+	end
+end
+
+function disable_scheme(npc, scheme)
+	local st = db.storage[npc:id()][scheme]
+	if st then
+		st.enabled = false
+	end
+end

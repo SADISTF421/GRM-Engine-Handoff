@@ -1,0 +1,50 @@
+-- Night-only visual grade. No changes to radiation or actor condition.
+local PPE = "grm_night_mood.ppe"
+local PPE_ID = 99741
+local MAX_FACTOR = 0.70
+local FADE_SECONDS = 6.0
+local CHECK_MS = 250
+local enabled = false
+local factor = 0
+local last_update = nil
+
+local function desired_factor()
+    local hour = level.get_time_hours()
+    local minute = level.get_time_minutes() % 60
+    local t = hour + minute / 60
+    -- Smooth game-time transition: 21:00-23:00 and 05:00-07:00.
+    if t >= 21 then return MAX_FACTOR * math.min(1, (t - 21) / 2) end
+    if t < 5 then return MAX_FACTOR end
+    if t < 7 then return MAX_FACTOR * (7 - t) / 2 end
+    return 0
+end
+
+function reset()
+    if enabled then pcall(function() level.remove_pp_effector(PPE_ID) end) end
+    enabled = false
+    factor = 0
+    last_update = nil
+end
+
+function update(actor)
+    if not actor or not actor:alive() then reset(); return end
+    local now = time_global()
+    if last_update and now >= last_update and now - last_update < CHECK_MS then return end
+    local dt = last_update and math.max(0, math.min(1, (now - last_update) / 1000)) or 0.25
+    last_update = now
+    local target = desired_factor()
+    local step = MAX_FACTOR * dt / FADE_SECONDS
+    if factor < target then factor = math.min(target, factor + step)
+    else factor = math.max(target, factor - step) end
+    if factor > 0.0001 then
+        if not enabled then
+            level.add_pp_effector(PPE, PPE_ID, true)
+            enabled = true
+        end
+        level.set_pp_effector_factor(PPE_ID, factor)
+    elseif enabled then
+        level.remove_pp_effector(PPE_ID)
+        enabled = false
+        factor = 0
+    end
+end

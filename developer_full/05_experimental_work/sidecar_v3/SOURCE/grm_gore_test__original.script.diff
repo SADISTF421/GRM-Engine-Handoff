@@ -1,0 +1,10 @@
+--- grm_gore_test.script_original
++++ grm_gore_test__original.script
+@@ -302,6 +302,7 @@
+                 return corpse:bone_position("__grm_test_hide_head__").x
+             end)
+             if ok and result == 1 then
++                pcall(function() sl_sidecar_manager.mark_hidden(obj) end)
+                 binder.grm_gore_anchored = true
+                 binder.grm_gore_map = pending.map
+                 binder.grm_gore_refresh = now

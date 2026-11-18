@@ -1,0 +1,86 @@
+-- Редкие обманы чувств при ранении, стрессе или облучении.
+-- Звуки и частицы не наносят урон и не создают объектов в мире.
+local actor_id, next_event, next_tick, last_time, last_health = nil, nil, 0, nil, nil
+local recent_hit_until = 0
+local failed = false
+local sound = nil
+local sounds = {
+    "shiza_skeleton\\rnd_horror3", "shiza_skeleton\\rnd_horror4",
+    "shiza_false_shot\\whine_1", "shiza_false_shot\\whine_3"
+}
+local function stop_sound()
+    if sound then pcall(function() sound:stop() end) end
+    sound = nil
+end
+function reset()
+    stop_sound()
+    actor_id, next_event, last_time, last_health = nil, nil, nil, nil
+    next_tick, recent_hit_until = 0, 0
+    failed = false
+end
+local function blocked(a)
+    if not a or not a:alive() or a:is_talking() or a:has_info("disabled_ui") then return true end
+    if device().precache_frame > 0 then return true end
+    if game and game.has_active_tutorial and game.has_active_tutorial() then return true end
+    if shiza_hud_items and shiza_hud_items.is_using_item and shiza_hud_items.is_using_item() then return true end
+    if shiza_radiation and shiza_radiation.is_death_started and shiza_radiation.is_death_started() then return true end
+    if shiza_vodka and shiza_vodka.is_death_started and shiza_vodka.is_death_started() then return true end
+    return false
+end
+local function stressed()
+    return shiza_kill_stress and shiza_kill_stress.is_active and shiza_kill_stress.is_active()
+end
+local function play_sound(a)
+    stop_sound()
+    local path = sounds[math.random(1, #sounds)]
+    local ok, err = pcall(function()
+        sound = sound_object(path)
+        sound.volume = 0.35
+        sound:play_at_pos(a, vector():set(0, 0, 0), 0, sound_object.s2d)
+    end)
+    if not ok then
+        stop_sound()
+        printf("[GRM_LIVE_SHIZA] Не удалось запустить звук %s: %s", path, tostring(err))
+    end
+end
+local function step(a)
+    if not a or not a:alive() then reset(); return end
+    local now = time_global()
+    local id = a:id()
+    if actor_id ~= id or (last_time and now < last_time) then
+        reset(); actor_id = id; next_event = now + math.random(20000, 35000)
+    end
+    last_time = now
+    if now < next_tick then return end
+    next_tick = now + 250
+    local health = a.health
+    if type(health) ~= "number" then return end
+    if last_health and last_health - health >= 0.025 then recent_hit_until = now + 45000 end
+    last_health = health
+    if blocked(a) then
+        stop_sound()
+        next_event = math.max(next_event or now, now + 10000)
+        return
+    end
+    local radiation = type(a.radiation) == "number" and a.radiation or 0
+    local tense = stressed() or health <= 0.65 or radiation >= 0.5 or now < recent_hit_until
+    if not tense or now < next_event then return end
+    next_event = now + (stressed() and math.random(45000, 70000) or math.random(75000, 120000))
+    -- Эффекты частиц запускает уже установленный контроллер периферийных видений.
+    if math.random(1, 2) == 1 then
+        if shiza_horror and shiza_horror.force_next then
+            shiza_horror.force_next(math.random(1, 2) == 1 and "edge_wisp" or "low_mist")
+        end
+    else
+        play_sound(a)
+    end
+end
+function update(actor)
+    if failed then return end
+    local ok, err = pcall(step, actor)
+    if not ok then
+        reset()
+        failed = true
+        printf("[GRM_LIVE_SHIZA] Ошибка эффекта: %s", tostring(err))
+    end
+end

@@ -1,0 +1,2 @@
+PASS: head/body ordering, startup log, mock blood timer, reset, 16 owned wrappers, separate shared pool, retained mock playing wrappers, 20 mock deaths
+Syntax checked

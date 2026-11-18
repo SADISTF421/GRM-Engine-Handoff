@@ -1,0 +1,198 @@
+-- Настоящий тёплый свет без зависимости от цветовой анимации костра.
+-- Используется штатная точечная лампа, а НЕ опасная зона костра.
+-- Для первого теста источник неподвижен: стойте на месте при поджигании.
+local SECTION = "shiza_cigarette_light_test"
+local LIFE_MS = 1200
+local RANGE = 1.2
+local BRIGHTNESS = 1.6
+local KEY_ID = "shiza_cig_light_test_id"
+local KEY_NAME = "shiza_cig_light_test_name"
+local epoch = 0
+local active = nil
+local function log(text)
+    pcall(function() shiza_cig_diag.write("light_"..tostring(text)) end)
+end
+log("module loaded; version=11")
+local function marker(actor,id,name)
+    if not actor then return false end
+    local ok=pcall(function()
+        xr_logic.pstor_store(actor,KEY_ID,id or 0)
+        xr_logic.pstor_store(actor,KEY_NAME,name or "")
+    end)
+    return ok
+end
+local function stored(actor)
+    if not actor then return 0,"" end
+    local ok,id,name=pcall(function()
+        return xr_logic.pstor_retrieve(actor,KEY_ID,0),
+            xr_logic.pstor_retrieve(actor,KEY_NAME,"")
+    end)
+    if not ok then return 0,"" end
+    return tonumber(id) or 0,name
+end
+local function same_object(sim,id,name)
+    if type(id)~="number" or id<1 or id>=65535 then return nil end
+    local obj=sim:object(id)
+    if not obj then return nil end
+    local ok,matches=pcall(function()
+        return obj:section_name()==SECTION and obj:name()==name
+    end)
+    if ok and matches then return obj end
+    return nil
+end
+local function release_owned(id,name)
+    local sim=alife()
+    if not sim then return false end
+    local obj=same_object(sim,id,name)
+    if not obj then return true end
+    -- Гасим уже появившийся свет до асинхронного удаления объекта.
+    pcall(function()
+        local client=level.object_by_id(id)
+        if client then client:get_hanging_lamp():turn_off() end
+    end)
+    local ok,err=pcall(function() sim:release(obj,true) end)
+    if not ok then log("delete failed: "..tostring(err)) end
+    return ok
+end
+local function clear_marker(actor,id,name)
+    local saved_id,saved_name=stored(actor)
+    if saved_id==id and saved_name==name then marker(actor,0,"") end
+end
+local function stop(b)
+    if not b or b.stopped then return end
+    b.stopped=true
+    if release_owned(b.id,b.name) then clear_marker(b.actor,b.id,b.name) end
+    if active==b then active=nil end
+end
+function reset()
+    epoch=epoch+1
+    stop(active)
+end
+function recover(actor)
+    -- При загрузке удаляем только свет, чей точный ID и имя записаны нами.
+    -- Другие лампы и костры не перебираем и не трогаем.
+    local id,name=stored(actor)
+    if id>0 then
+        if not release_owned(id,name) then return false end
+        clear_marker(actor,id,name)
+    end
+    return true
+end
+local function write_tail(p,custom,startup)
+    p:w_u32(custom and 4294945360 or 4294967295)
+    p:w_float(custom and BRIGHTNESS or 1)
+    p:w_stringZ("")
+    p:w_float(custom and RANGE or 10)
+    p:w_u16(custom and 12 or 28)
+    p:w_stringZ(startup)
+    p:w_stringZ("")
+    p:w_float(100)
+    p:w_float(custom and 0.01 or 0.1)
+    p:w_float(custom and 0.1 or 10)
+    p:w_float(custom and 0 or 0.1)
+    p:w_stringZ("")
+    p:w_stringZ("")
+    p:w_stringZ("")
+    p:w_float(2.0943951024)
+    p:w_stringZ("")
+    p:w_float(custom and 0 or 0.7)
+    p:w_stringZ("")
+end
+local function default_tail(packet,offset,total,startup)
+    -- Только побайтовая проверка в известных границах: не читаем
+    -- произвольные строки из неподтверждённого двоичного формата.
+    local expected=net_packet()
+    write_tail(expected,false,startup)
+    if total-offset~=expected:w_tell() then return false end
+    packet:r_seek(offset);expected:r_seek(0)
+    local cone_start=expected:w_tell()-9
+    for i=1,expected:w_tell() do
+        local a,b=packet:r_u8(),expected:r_u8()
+        if a~=b and not (i>=cone_start and i<cone_start+4) then return false end
+    end
+    packet:r_seek(offset+cone_start-1)
+    local cone=packet:r_float()
+    if cone<2.09 or cone>2.10 then return false end
+    return true
+end
+local function configure(obj)
+    if obj.online~=false then return false,"lamp already online; configuration skipped" end
+    local original=net_packet()
+    obj:STATE_Write(original)
+    local total=original:w_tell()
+    if total<46 or total>8192 then return false,"unexpected state size" end
+    local offset=nil
+    -- Различается только стандартная пустая/$editor стартовая анимация.
+    for _,variant in ipairs({{53,"$editor"},{46,""}}) do
+        local candidate=total-variant[1]
+        if candidate>=0 and default_tail(original,candidate,total,variant[2]) then offset=candidate;break end
+    end
+    if not offset then
+        local bytes={}
+        original:r_seek(math.max(0,total-96))
+        for i=math.max(0,total-96),total-1 do bytes[#bytes+1]=string.format("%02x",original:r_u8()) end
+        log("state bytes="..tostring(total).." tail="..table.concat(bytes))
+        return false,"unrecognized lamp state; no unsafe rewrite"
+    end
+    local patched=net_packet()
+    original:r_seek(0)
+    for i=1,offset do patched:w_u8(original:r_u8()) end
+    -- Точечный свет без физики, теней, модели и висящего glow-спрайта.
+    -- Цветовая анимация та же, что у штатного костра.
+    write_tail(patched,true,"")
+    patched:r_seek(0)
+    obj:STATE_Read(patched,patched:w_tell())
+    obj:can_switch_online(true)
+    obj:can_switch_offline(false)
+    return true
+end
+function flash(pos,actor)
+    log("flash requested")
+    reset()
+    if not actor or not actor:alive() then return false end
+    local sim=alife()
+    if not sim then return false end
+    local ok_ini,exists=pcall(function() return system_ini():section_exist(SECTION) end)
+    if not ok_ini or not exists then log("section missing: "..SECTION);return false end
+    if not recover(actor) then log("stale light cleanup failed");return false end
+    -- Нужен рабочий журнал: без него не создаём сохраняемый временный объект.
+    if not marker(actor,0,"") then log("actor journal unavailable");return false end
+    local ok,obj=pcall(function()
+        return sim:create(SECTION,pos,actor:level_vertex_id(),actor:game_vertex_id())
+    end)
+    if not ok or not obj then log("create failed: "..tostring(obj));return false end
+    local identity_ok,id,name=pcall(function() return obj.id,obj:name() end)
+    if not identity_ok or type(id)~="number" or id<1 or id>=65535
+        or type(name)~="string" or name=="" then
+        pcall(function() sim:release(obj,true) end)
+        log("created lamp identity unavailable");return false
+    end
+    local b={id=id,name=name,actor=actor,actor_id=actor:id(),token=epoch,
+        started=time_global(),stopped=false}
+    active=b
+    if not marker(actor,b.id,b.name) then stop(b);log("journal write failed");return false end
+    local success,configured,reason=pcall(function() return configure(obj) end)
+    if not success or not configured then
+        log("configuration failed: "..tostring(success and reason or configured))
+        stop(b);return false
+    end
+    log("configured point light id="..tostring(b.id).."; awaiting client")
+    level.add_call(function()
+        if b.stopped or b.token~=epoch or not db.actor
+            or db.actor:id()~=b.actor_id or not db.actor:alive() then return true end
+        local now=time_global()
+        if not b.lit_at then
+            local client=level.object_by_id(b.id)
+            if client then
+                local ok,err=pcall(function() client:get_hanging_lamp():turn_on() end)
+                if not ok then log("client turn_on failed: "..tostring(err));return true end
+                b.lit_at=now
+                log("client light turned on; range=1.2 duration=1200ms")
+            elseif now-b.started>1800 then
+                log("client did not appear within 1800ms");return true
+            end
+        end
+        return b.lit_at and now-b.lit_at>=LIFE_MS or false
+    end,function() stop(b) end)
+    return true
+end

@@ -1,0 +1,25 @@
+Вход: SHA-256 3a1ac31b52efd39965c89c5e43347e4e059adfcfb7cd6a16f85bc05f0716528b
+Исходник V1 до любых изменений: SHA-256 7526ad7042e1ad3eead1a89baf15d1ac7be1dcae71bc27db2b0f24010c690d45.
+
+XREF: строка '* Saving objects...' RVA 0x46E1DC, push по RVA 0x73555.
+Сопоставлено с исследовательским CALifeObjectRegistry::save(IWriter&).
+Проверка не относится к CALifeStorageManager::save напрямую.
+
+RVA 0x735A0 file 0x729A0:
+ до V1: 8B 4E 10 8B 01            mov ecx,[esi+0x10]; mov eax,[ecx]
+ V1:    E9 9B C3 5A 00            jmp RVA 0x61F940
+ V2:    E9 5B C4 5A 00            jmp RVA 0x61FA00
+
+Код V2: RVA 0x61FA00 file 0x603E00, 280 исходных нулевых байтов
+заменены на SOURCE/guard.bin (исходник guard.s, раскладка link.ld).
+Старый код V1 по RVA 0x61F940 остаётся в файле, но не вызывается этим hook.
+VirtualQuery — импорт KERNEL32 в IAT RVA 0x46601C, вызов относительно базы DLL;
+вызов при переезде DLL вычисляет базу относительным call/pop, не абсолютным VA.
+Успешный путь после восстановления: mov ecx,[esi+0x10]; mov eax,[ecx];
+ jmp RVA 0x735A5. Отказ: jmp RVA 0x735CD (следующий узел). Флаги сохраняются.
+.grm VirtualSize file 0x2C0: 52 09 00 00 -> 18 0B 00 00;
+RawSize 0xC00, SizeOfImage 0x620000 без изменения.
+
+Входной и выходной SHA проверяет установщик. Все другие байты не изменены.
+Ненулевая и читаемая память может быть освобождённым объектом. VirtualQuery
+не является проверкой владения/типа/времени жизни и не ловит исключения save.

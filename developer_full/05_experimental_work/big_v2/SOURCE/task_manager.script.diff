@@ -1,0 +1,12 @@
+--- current/task_manager.script
++++ test/task_manager.script
+@@ -231,6 +231,9 @@
+     if count == 255 and p:r_elapsed() >= 8 then
+         local start = p:r_tell()
+         if p:r_u32() == grm_magic1 and p:r_u32() == grm_magic2 then
++            -- Маркер занял восемь байтов; для количества нужны ещё два.
++            -- Повреждённые данные заданий не пропускаются и не обнуляются.
++            if p:r_elapsed() < 2 then error("GRM: усечён заголовок задач") end
+             compact = true
+             count = p:r_u16()
+         else

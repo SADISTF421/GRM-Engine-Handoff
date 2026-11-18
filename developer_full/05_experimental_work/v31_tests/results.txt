@@ -1,0 +1,3 @@
+PASS mock: 200 records, 100 removed IDs pruned before snapshot; direct forget; absent IO resets; failed lookup does not delete
+PASS: actual actor save hook called 8 times; old/new actor mock packet identical, actor save/load 4 difficulties and pause, mocks only
+Syntax checked

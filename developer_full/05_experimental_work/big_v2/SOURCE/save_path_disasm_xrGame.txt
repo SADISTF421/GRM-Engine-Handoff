@@ -1,0 +1,61 @@
+
+/data/grm/current2026/bin.rar/bin/xrGame.dll:     file format pei-i386
+
+
+Disassembly of section .text:
+
+10073430 <.text+0x72430>:
+10073430:	b8 14 20 00 00       	mov    eax,0x2014
+10073435:	e8 36 bc 3e 00       	call   0x1045f070
+1007343a:	8b 84 24 20 20 00 00 	mov    eax,DWORD PTR [esp+0x2020]
+10073441:	ff 00                	inc    DWORD PTR [eax]
+10073443:	53                   	push   ebx
+10073444:	55                   	push   ebp
+10073445:	56                   	push   esi
+10073446:	57                   	push   edi
+10073447:	8b bc 24 2c 20 00 00 	mov    edi,DWORD PTR [esp+0x202c]
+1007344e:	8b 07                	mov    eax,DWORD PTR [edi]
+10073450:	8b 10                	mov    edx,DWORD PTR [eax]
+10073452:	8b e9                	mov    ebp,ecx
+10073454:	6a 01                	push   0x1
+10073456:	8d 4c 24 1c          	lea    ecx,[esp+0x1c]
+1007345a:	51                   	push   ecx
+1007345b:	57                   	push   edi
+1007345c:	ff d2                	call   edx
+1007345e:	8b 84 24 18 20 00 00 	mov    eax,DWORD PTR [esp+0x2018]
+10073465:	8b b4 24 28 20 00 00 	mov    esi,DWORD PTR [esp+0x2028]
+1007346c:	50                   	push   eax
+1007346d:	8b ce                	mov    ecx,esi
+1007346f:	ff 15 e4 6d 46 10    	call   DWORD PTR ds:0x10466de4
+10073475:	8b 84 24 18 20 00 00 	mov    eax,DWORD PTR [esp+0x2018]
+1007347c:	8b 16                	mov    edx,DWORD PTR [esi]
+1007347e:	8b 52 0c             	mov    edx,DWORD PTR [edx+0xc]
+10073481:	50                   	push   eax
+10073482:	8d 4c 24 1c          	lea    ecx,[esp+0x1c]
+10073486:	51                   	push   ecx
+10073487:	8b ce                	mov    ecx,esi
+10073489:	ff d2                	call   edx
+1007348b:	8b 57 08             	mov    edx,DWORD PTR [edi+0x8]
+1007348e:	8b 52 0c             	mov    edx,DWORD PTR [edx+0xc]
+10073491:	33 c0                	xor    eax,eax
+10073493:	66 8b c8             	mov    cx,ax
+10073496:	89 44 24 10          	mov    DWORD PTR [esp+0x10],eax
+1007349a:	66 89 4c 24 18       	mov    WORD PTR [esp+0x18],cx
+1007349f:	b8 02 00 00 00       	mov    eax,0x2
+100734a4:	8d 4f 08             	lea    ecx,[edi+0x8]
+100734a7:	89 84 24 18 20 00 00 	mov    DWORD PTR [esp+0x2018],eax
+100734ae:	8d 44 24 18          	lea    eax,[esp+0x18]
+100734b2:	50                   	push   eax
+100734b3:	ff d2                	call   edx
+100734b5:	8b 84 24 18 20 00 00 	mov    eax,DWORD PTR [esp+0x2018]
+100734bc:	50                   	push   eax
+100734bd:	8b ce                	mov    ecx,esi
+100734bf:	ff 15 e4 6d 46 10    	call   DWORD PTR ds:0x10466de4
+100734c5:	8b 84 24 18 20 00 00 	mov    eax,DWORD PTR [esp+0x2018]
+100734cc:	8b 16                	mov    edx,DWORD PTR [esi]
+100734ce:	8b 52 0c             	mov    edx,DWORD PTR [edx+0xc]
+100734d1:	50                   	push   eax
+100734d2:	8d 4c 24 1c          	lea    ecx,[esp+0x1c]
+100734d6:	51                   	push   ecx
+100734d7:	8b ce                	mov    ecx,esi
+100734d9:	ff                 	call   edx

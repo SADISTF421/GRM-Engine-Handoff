@@ -1,0 +1,289 @@
+-- Вероятность появления скелета после убийства подходящего НПС.
+local CHANCE_PERCENT = 3
+-- Ограничения и интервалы в миллисекундах, кроме расстояния в метрах.
+local MAX_PENDING = 8
+local MAX_DISTANCE = 30
+local EXPIRE_MS = 90000
+local SPAWN_TIMEOUT_MS = 5000
+local DEATH_SETTLE_MS = 3000
+local DETACH_TIMEOUT_MS = 10000
+local STABLE_MS = 10000
+local PREFLIGHT_MS = 3000
+local HIDE_REFRESH_MS = 250
+local SECTION = "shiza_test_bloody_skeleton"
+local PPE, PPE_ID, PPE_FACTOR, PPE_MS = "testalk.ppe", 99423, 0.15, 500
+local SOUNDS = {"shiza_skeleton\\rnd_horror3", "shiza_skeleton\\rnd_horror4"}
+local SOUND_VOLUME, SOUND_COOLDOWN_MS = 0.5, 10000
+local pending = {}
+local proxies = {}
+local PROXY_LIFE_MS = 3000
+local pp_until, next_sound = 0, 0
+local snd = nil
+
+local function remove_pp()
+    pcall(function() level.remove_pp_effector(PPE_ID) end)
+    pp_until=0
+end
+local function stop_sound()
+    if snd then pcall(function() snd:stop() end) end
+    snd=nil
+end
+local function corpse(entry)
+    local ok,obj=pcall(function()
+        local o=level.object_by_id(entry.id)
+        if o and o:name()==entry.name and o:section()==entry.section and not o:alive() then return o end
+    end)
+    if ok then return obj end
+    return nil
+end
+local function corpse_server(entry)
+    local ok,obj=pcall(function()
+        local o=alife():object(entry.id)
+        if o and o:name()==entry.name and o:section_name()==entry.section then return o end
+    end)
+    if ok then return obj end
+    return nil
+end
+local function remove_proxy(p)
+    pcall(function()
+        local o=alife():object(p.id)
+        if o and o:name()==p.name and o:section_name()==SECTION and o.parent_id==65535 then
+            alife():release(o,true)
+        end
+    end)
+end
+local function clean_proxies(now,all)
+    for i=#proxies,1,-1 do
+        if all or now>=proxies[i].remove_at then remove_proxy(proxies[i]);table.remove(proxies,i) end
+    end
+end
+local function cleanup_unshown_proxy(entry)
+    if not entry.proxy_id or entry.shown then return end
+    pcall(function()
+        local o=alife():object(entry.proxy_id)
+        if o and o:name()==entry.proxy_name and o:section_name()==SECTION and o.parent_id==65535 then
+            alife():release(o,true)
+        end
+    end)
+end
+-- При сбое возвращаем видимость тела и оставляем его в мире.
+local function cancel(entry,why)
+    if entry.hidden then
+        local obj=corpse(entry)
+        if obj then pcall(function() obj:set_visual_hidden(false) end) end
+        entry.hidden=false
+    end
+    cleanup_unshown_proxy(entry)
+
+end
+function reset()
+    for _,e in ipairs(pending) do cancel(e,"reset") end
+    pending={};clean_proxies(0,true);remove_pp();stop_sound();next_sound=0
+end
+-- При сохранении отменяем незавершённую замену, чтобы не потерять вещи.
+function before_save()
+    for _,e in ipairs(pending) do cancel(e,"save") end
+    pending={};clean_proxies(0,true);remove_pp();stop_sound()
+end
+-- Сюжетных персонажей и защищённых НПС не заменяем.
+local function eligible(obj)
+    local ok,result=pcall(function()
+        if not obj or not IsStalker(obj) or obj:alive() or obj:section()=="m_trader" then return false end
+        local sid=obj:story_id()
+        if sid~=nil and sid~=-1 and sid~=4294967295 and sid~=4294967296 then return false end
+        local ini=obj:spawn_ini()
+        if ini and (ini:section_exist("known_info") or ini:section_exist("dont_spawn_online")) then return false end
+        if obj:name()=="esc_wolf" then return false end
+        return true
+    end)
+    return ok and result
+end
+local function inventory(obj)
+    local items={}
+    local ok=pcall(function()
+        local ini=system_ini()
+        for i=0,obj:object_count()-1 do
+            local item=obj:object(i)
+            if not item then error("inventory item unavailable") end
+            local sec=item:section()
+            if ini:line_exist(sec,"quest_item") and ini:r_bool(sec,"quest_item") then error("quest item") end
+            items[#items+1]=item
+        end
+    end)
+    if not ok then return nil end
+    return items
+end
+local function item_server(record)
+    local ok,o=pcall(function()
+        local v=alife():object(record.id)
+        if v and v:name()==record.name and v:section_name()==record.section then return v end
+    end)
+    if ok then return o end
+    return nil
+end
+local function make_item_record(item,owner_id)
+    local ok,r=pcall(function()
+        local id=item:id()
+        local server=alife():object(id)
+        if not server or server.parent_id~=owner_id then return nil end
+        return {id=id,name=server:name(),section=server:section_name()}
+    end)
+    if ok then return r end
+    return nil
+end
+function on_actor_kill(obj)
+    if #pending>=MAX_PENDING or math.random(100)>CHANCE_PERCENT then return end
+    local now=time_global()
+    local ok,e=pcall(function()
+        return {id=obj:id(),name=obj:name(),section=obj:section(),expires=now+EXPIRE_MS,
+            settle_at=now+DEATH_SETTLE_MS,verified={},stage="spawn"}
+    end)
+    if ok and e then
+        pending[#pending+1]=e
+    end
+end
+-- Короткое помутнение, звук и физическое разрушение скелета.
+local function effect(now,proxy)
+    remove_pp()
+    pcall(function() level.add_pp_effector(PPE,PPE_ID,true);level.set_pp_effector_factor(PPE_ID,PPE_FACTOR);pp_until=now+PPE_MS end)
+    pcall(function()
+        local h=hit();h.draftsman=db.actor;h.type=hit.fire_wound
+        h.direction=vector():set(0,-1,0);h:bone("torso");h.power=1;h.impulse=1;proxy:hit(h)
+    end)
+    if now<next_sound then return end
+    next_sound=now+SOUND_COOLDOWN_MS;stop_sound()
+    local ok,err=pcall(function()
+        snd=sound_object(SOUNDS[math.random(1,#SOUNDS)]);snd.volume=SOUND_VOLUME
+        snd:play_at_pos(db.actor,vector():set(0,0,0),0,sound_object.s2d)
+    end)
+    if not ok then stop_sound() end
+end
+local function process(e,now,actor)
+    if now>=e.expires then cancel(e,"timeout");return true end
+    local npc=corpse(e)
+    local server=corpse_server(e)
+    if not npc or not server or not eligible(npc) then cancel(e,"corpse unavailable or protected");return true end
+    local ok,near=pcall(function() return npc:position():distance_to(actor:position())<=MAX_DISTANCE end)
+    if not ok or not near then cancel(e,"too far");return true end
+    local items=inventory(npc)
+    if not items then cancel(e,"inventory unavailable or quest item");return true end
+    if not e.hidden then
+        local hidden=pcall(function() npc:set_visual_hidden(true) end)
+        if not hidden then pcall(function() npc:set_visual_hidden(false) end);cancel(e,"hide unavailable");return true end
+        e.hidden=true;e.next_hide=now+HIDE_REFRESH_MS
+    elseif now>=e.next_hide then
+        local hidden=pcall(function() npc:set_visual_hidden(true) end)
+        if not hidden then cancel(e,"hide refresh failed");return true end
+        e.next_hide=now+HIDE_REFRESH_MS
+    end
+    if e.stage=="spawn" then
+        local made,p=pcall(function() return alife():create(SECTION,npc:position(),npc:level_vertex_id(),npc:game_vertex_id()) end)
+        if not made or not p then cancel(e,"skeleton spawn failed");return true end
+        local identified,id,name=pcall(function() return p.id,p:name() end)
+        if not identified or not id or not name then
+            pcall(function() if p.parent_id==65535 then alife():release(p,true) end end)
+            cancel(e,"skeleton identity unavailable");return true
+        end
+        e.proxy_id=id;e.proxy_name=name;e.proxy_deadline=now+SPAWN_TIMEOUT_MS;e.stage="proxy"
+        return false
+    end
+    if e.stage=="proxy" then
+        if now>=e.proxy_deadline then cancel(e,"skeleton offline");return true end
+        local proxy_server=alife():object(e.proxy_id)
+        if not proxy_server or proxy_server:name()~=e.proxy_name or proxy_server:section_name()~=SECTION then cancel(e,"skeleton unavailable");return true end
+        local proxy=level.object_by_id(e.proxy_id)
+        if not proxy then return false end
+        e.shown=true;e.stage="detach";effect(now,proxy)
+        proxies[#proxies+1]={id=e.proxy_id,name=e.proxy_name,remove_at=now+PROXY_LIFE_MS}
+        return false
+    end
+    if now<e.settle_at then return false end
+    if not e.preflight_complete then
+        -- Перед выбросом ждём, пока состав инвентаря и владельцы предметов перестанут меняться.
+        -- Это снижает риск, но не доказывает, что очередь событий движка пуста.
+        local signature={}
+        for _,item in ipairs(items) do
+            local record=make_item_record(item,e.id)
+            if not record then e.preflight_since=nil;return false end
+            signature[#signature+1]=tostring(record.id)..":"..record.section
+        end
+        table.sort(signature)
+        local key=table.concat(signature,"|")
+        if e.preflight_key~=key then e.preflight_key=key;e.preflight_since=now;return false end
+        if not e.preflight_since then e.preflight_since=now;return false end
+        if now-e.preflight_since<PREFLIGHT_MS then return false end
+        e.preflight_complete=true
+        return false
+    end
+    -- Дожидаемся подтверждения текущего предмета, не посылая событие повторно.
+    if e.waiting then
+        local v=item_server(e.waiting)
+        if not v then cancel(e,"sent item disappeared");return true end
+        if v.parent_id~=e.id then
+            e.verified[#e.verified+1]=e.waiting;e.waiting=nil;e.stable_since=now
+            e.client_wait_until=now+DETACH_TIMEOUT_MS
+        elseif now>=e.detach_deadline then cancel(e,"detach not acknowledged");return true
+        else return false end
+        return false
+    end
+    if #items>0 then
+        local chosen=nil
+        for _,item in ipairs(items) do
+            local id=item:id()
+            local known=false
+            for _,r in ipairs(e.verified) do if r.id==id then known=true;break end end
+            local server_item=alife():object(id)
+            if not server_item then cancel(e,"inventory server item unavailable");return true end
+            if server_item.parent_id==e.id then
+                if known then cancel(e,"dropped item returned to NPC");return true end
+                chosen=item;break
+            end
+            -- Клиент может отставать от сервера: не отправляем повторный выброс.
+        end
+        if chosen then
+            local record=make_item_record(chosen,e.id)
+            if not record then cancel(e,"item identity not confirmed");return true end
+            local dropped=pcall(function() npc:drop_item(chosen) end)
+            if not dropped then cancel(e,"drop failed");return true end
+            e.waiting=record;e.detach_deadline=now+DETACH_TIMEOUT_MS;e.stable_since=nil
+        elseif not e.client_wait_until then e.client_wait_until=now+DETACH_TIMEOUT_MS
+        elseif now>=e.client_wait_until then cancel(e,"client inventory did not update");return true end
+        return false
+    end
+    e.client_wait_until=nil
+    if not e.stable_since then e.stable_since=now;return false end
+    if now-e.stable_since<STABLE_MS then return false end
+    -- Перед удалением проверяем отделённые вещи и пустой инвентарь ещё раз.
+    for _,r in ipairs(e.verified) do
+        local v=item_server(r)
+        if not v or v.parent_id==e.id then cancel(e,"dropped item not independent");return true end
+    end
+    local final=inventory(npc)
+    if not final or #final~=0 then e.stable_since=nil;return false end
+    server=corpse_server(e)
+    if not server then cancel(e,"corpse disappeared");return true end
+    -- Снимаем тело с учёта гниения только перед его удалением.
+    local forgot=pcall(function() sl_rotting.forget(npc) end)
+    if not forgot then cancel(e,"rotting lock failed");return true end
+    local released,err=pcall(function() alife():release(server,true) end)
+    if not released then
+        cancel(e,"corpse release failed")
+        pcall(function() sl_rotting.observe_npc(npc) end)
+        return true
+    end
+    e.hidden=false
+    return true
+end
+function update()
+    local now=time_global()
+    clean_proxies(now,false)
+    if pp_until>0 and now>=pp_until then remove_pp() end
+    local actor=db and db.actor
+    if not actor or not actor:alive() then for _,e in ipairs(pending) do cancel(e,"actor unavailable") end;pending={};return end
+    for i=#pending,1,-1 do
+        local ok,finished=pcall(process,pending[i],now,actor)
+        if not ok then
+            cancel(pending[i],"script error: "..string.sub(tostring(finished),1,120));table.remove(pending,i)
+        elseif finished then table.remove(pending,i) end
+    end
+end

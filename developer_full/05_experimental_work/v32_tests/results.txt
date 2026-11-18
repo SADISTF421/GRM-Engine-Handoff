@@ -1,0 +1,4 @@
+PASS: deleted/offline/reused NPC not looked up as client, online matching NPC still executes hide on mocks
+PASS: prune missing/reused IDs, fail-closed on lookup error in mocks
+PASS: actual HUD save_state outputs numerical journal string, not actor/sound userdata; mock only
+Syntax checked

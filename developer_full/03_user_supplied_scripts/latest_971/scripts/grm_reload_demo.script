@@ -1,0 +1,134 @@
+-- Manual reload camera demo. The sentinel is a console relay, not a reload event.
+local ID=28746
+local FILES={
+    ["wpn_abakan"]={"grm_reload_demo\\all\\wpn_abakan.anm",3.50000},
+    ["wpn_ak74"]={"grm_reload_demo\\all\\wpn_ak74.anm",3.00000},
+    ["wpn_ak74u"]={"grm_reload_demo\\ak74u_reload_timed.anm",3.93333},
+    ["wpn_akm74"]={"grm_reload_demo\\all\\wpn_akm74.anm",2.69333},
+    ["wpn_akms"]={"grm_reload_demo\\all\\wpn_akms.anm",3.20000},
+    ["wpn_aks74"]={"grm_reload_demo\\all\\wpn_aks74.anm",3.30000},
+    ["wpn_aps_sk1"]={"grm_reload_demo\\all\\wpn_aps_sk1.anm",2.43333},
+    ["wpn_beretta"]={"grm_reload_demo\\all\\wpn_beretta.anm",2.53968},
+    ["wpn_bm16"]={"grm_reload_demo\\all\\wpn_bm16.anm",4.83333},
+    ["wpn_colt1911"]={"grm_reload_demo\\all\\wpn_colt1911.anm",2.19444},
+    ["wpn_desert_eagle"]={"grm_reload_demo\\all\\wpn_desert_eagle.anm",1.95062},
+    ["wpn_fn2000"]={"grm_reload_demo\\all\\wpn_fn2000.anm",2.43333},
+    ["wpn_fort"]={"grm_reload_demo\\all\\wpn_fort.anm",2.70000},
+    ["wpn_g36"]={"grm_reload_demo\\all\\wpn_g36.anm",2.80000},
+    ["wpn_gauss"]={"grm_reload_demo\\all\\wpn_gauss.anm",3.16667},
+    ["wpn_gm94"]={"grm_reload_demo\\all\\wpn_gm94.anm",1.26667},
+    ["wpn_groza"]={"grm_reload_demo\\all\\wpn_groza.anm",3.46667},
+    ["wpn_groza_old"]={"grm_reload_demo\\all\\wpn_groza_old.anm",3.96667},
+    ["wpn_gsh18"]={"grm_reload_demo\\all\\wpn_gsh18.anm",2.43333},
+    ["wpn_hpsa"]={"grm_reload_demo\\all\\wpn_hpsa.anm",2.66667},
+    ["wpn_hpsa_old"]={"grm_reload_demo\\all\\wpn_hpsa_old.anm",2.66667},
+    ["wpn_igla"]={"grm_reload_demo\\all\\wpn_igla.anm",1.26667},
+    ["wpn_l85"]={"grm_reload_demo\\all\\wpn_l85.anm",3.33333},
+    ["wpn_lr300"]={"grm_reload_demo\\all\\wpn_lr300.anm",3.26667},
+    ["wpn_m134"]={"grm_reload_demo\\all\\wpn_m134.anm",4.80000},
+    ["wpn_mp5"]={"grm_reload_demo\\all\\wpn_mp5.anm",2.60000},
+    ["wpn_p90"]={"grm_reload_demo\\all\\wpn_p90.anm",2.93333},
+    ["wpn_pb"]={"grm_reload_demo\\all\\wpn_pb.anm",3.30556},
+    ["wpn_pkm"]={"grm_reload_demo\\all\\wpn_pkm.anm",9.00000},
+    ["wpn_pm"]={"grm_reload_demo\\all\\wpn_pm.anm",3.30556},
+    ["wpn_striker"]={"grm_reload_demo\\all\\wpn_striker.anm",0.79365},
+    ["wpn_protecta"]={"grm_reload_demo\\all\\wpn_protecta.anm",0.79365},
+    ["wpn_rg-6"]={"grm_reload_demo\\all\\wpn_rg-6.anm",2.63333},
+    ["wpn_rpg7"]={"grm_reload_demo\\all\\wpn_rpg7.anm",4.63333},
+    ["wpn_rpk74"]={"grm_reload_demo\\all\\wpn_rpk74.anm",2.69333},
+    ["wpn_sig220"]={"grm_reload_demo\\all\\wpn_sig220.anm",2.80000},
+    ["wpn_sig550"]={"grm_reload_demo\\all\\wpn_sig550.anm",3.53333},
+    ["wpn_spas12"]={"grm_reload_demo\\all\\wpn_spas12.anm",0.79365},
+    ["wpn_svd"]={"grm_reload_demo\\all\\wpn_svd.anm",3.63333},
+    ["wpn_svu"]={"grm_reload_demo\\all\\wpn_svu.anm",2.93333},
+    ["wpn_toz34"]={"grm_reload_demo\\all\\wpn_toz34.anm",4.30000},
+    ["wpn_usp"]={"grm_reload_demo\\all\\wpn_usp.anm",2.66667},
+    ["wpn_val"]={"grm_reload_demo\\all\\wpn_val.anm",2.83333},
+    ["wpn_vintorez"]={"grm_reload_demo\\all\\wpn_vintorez.anm",2.83333},
+    ["wpn_vsk94"]={"grm_reload_demo\\all\\wpn_vsk94.anm",2.75758},
+    ["wpn_walther"]={"grm_reload_demo\\all\\wpn_walther.anm",2.66667},
+    ["wpn_wincheaster1300"]={"grm_reload_demo\\all\\wpn_wincheaster1300.anm",0.73016},
+}
+FILES["wpn_abakan_m1"]=FILES["wpn_abakan"]
+FILES["wpn_abakan_m2"]=FILES["wpn_abakan"]
+FILES["wpn_ak74_arena"]=FILES["wpn_ak74"]
+FILES["wpn_ak74_m1"]=FILES["wpn_ak74"]
+FILES["wpn_ak74u_arena"]=FILES["wpn_ak74u"]
+FILES["wpn_ak74u_m1"]=FILES["wpn_ak74u"]
+FILES["wpn_bm16_arena"]=FILES["wpn_bm16"]
+FILES["wpn_colt_m1"]=FILES["wpn_colt1911"]
+FILES["wpn_eagle_m1"]=FILES["wpn_desert_eagle"]
+FILES["wpn_fn2000_arena"]=FILES["wpn_fn2000"]
+FILES["wpn_fort_m1"]=FILES["wpn_fort"]
+FILES["wpn_g36_arena"]=FILES["wpn_g36"]
+FILES["wpn_g36_m1"]=FILES["wpn_g36"]
+FILES["wpn_gauss_m1"]=FILES["wpn_gauss"]
+FILES["wpn_gm94_slozhenniy"]=FILES["wpn_gm94"]
+FILES["wpn_groza_arena"]=FILES["wpn_groza"]
+FILES["wpn_groza_m1"]=FILES["wpn_groza"]
+FILES["wpn_l85_m1"]=FILES["wpn_l85"]
+FILES["wpn_l85_m2"]=FILES["wpn_l85"]
+FILES["wpn_lr300_m1"]=FILES["wpn_lr300"]
+FILES["wpn_mp5_arena"]=FILES["wpn_mp5"]
+FILES["wpn_mp5_m1"]=FILES["wpn_mp5"]
+FILES["wpn_mp5_m2"]=FILES["wpn_mp5"]
+FILES["wpn_pm_arena"]=FILES["wpn_pm"]
+FILES["wpn_rg6_m1"]=FILES["wpn_rg-6"]
+FILES["wpn_sig_m1"]=FILES["wpn_sig550"]
+FILES["wpn_sig_m2"]=FILES["wpn_sig550"]
+FILES["wpn_spas12_arena"]=FILES["wpn_spas12"]
+FILES["wpn_spas12_m1"]=FILES["wpn_spas12"]
+FILES["wpn_svd_m1"]=FILES["wpn_svd"]
+FILES["wpn_toz34_arena"]=FILES["wpn_bm16"]
+FILES["wpn_val_arena"]=FILES["wpn_val"]
+FILES["wpn_val_m1"]=FILES["wpn_val"]
+FILES["wpn_walther_m1"]=FILES["wpn_walther"]
+FILES["wpn_winchester_m1"]=FILES["wpn_wincheaster1300"]
+-- Requires the patched engine exposing weapon:grm_is_reloading().
+-- This is a state-driven prototype; it does not bind any key or change player name.
+local last_id,last_section,last_reload,active_id,until_at=nil,nil,false,nil,nil
+local disabled=false
+local function stop()
+    if active_id then pcall(function() level.remove_cam_effector(ID) end) end
+    active_id,until_at=nil,nil
+end
+function reset()
+    stop();last_id,last_section,last_reload=nil,nil,false;disabled=false
+end
+local function allowed(a)
+    if not a or not a:alive() or a:is_talking() or a.health<=0.20 then return false end
+    if device().precache_frame>0 or a:has_info("disabled_ui") then return false end
+    if shiza_hud_items and shiza_hud_items.is_using_item and shiza_hud_items.is_using_item() then return false end
+    if shiza_kill_stress and shiza_kill_stress.is_active and shiza_kill_stress.is_active() then return false end
+    if shiza_radiation and shiza_radiation.is_death_started and shiza_radiation.is_death_started() then return false end
+    if shiza_vodka and shiza_vodka.is_death_started and shiza_vodka.is_death_started() then return false end
+    return true
+end
+local function step(a)
+    if disabled then return end
+    if not allowed(a) then stop();last_id,last_section,last_reload=nil,nil,false;return end
+    local w=a:active_item()
+    if not w then stop();last_id,last_section,last_reload=nil,nil,false;return end
+    local sec,id=w:section(),w:id()
+    local entry=FILES[sec]
+    if not entry then stop();last_id,last_section,last_reload=nil,nil,false;return end
+    local ok,reloading=pcall(function() return w:grm_is_reloading() end)
+    if not ok or type(reloading)~="boolean" then
+        stop();disabled=true;printf("[grm_reload_demo] Engine method grm_is_reloading missing; disabled")
+        return
+    end
+    if id~=last_id or sec~=last_section then stop();last_reload=false end
+    local now=time_global()
+    if active_id and (not reloading or now>=until_at) then stop() end
+    if reloading and not last_reload then
+        stop()
+        local d=level.add_cam_effector(entry[1],ID,false,"")
+        if type(d)~="number" or d<0.1 or d>20 then d=entry[2] end
+        active_id=id;until_at=now+math.ceil(d*1000)
+    end
+    last_id,last_section,last_reload=id,sec,reloading
+end
+function update(a)
+    local ok,err=pcall(step,a)
+    if not ok then stop();disabled=true;printf("[grm_reload_demo] disabled: %s",tostring(err)) end
+end

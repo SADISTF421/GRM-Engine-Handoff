@@ -1,0 +1,41 @@
+--- V3.2/gamedata/scripts/shiza_reznya.script
++++ V3.3/gamedata/scripts/shiza_reznya.script
+@@ -152,6 +152,9 @@
+ function piter_moment(obj)
+ 
+ 	if not obj then return end
++    -- Отделяем только запись runtime; физику и рендер движка не меняем.
++    pcall(function() grm_gore_test.forget(obj:id()) end)
++    local target_id, target_name, target_section = obj:id(), obj:name(), obj:section()
+     sl_rotting.begin_harvest(obj)
+ 	
+ 	local time = time_global()
+@@ -182,7 +185,27 @@
+ 			return harvest_timer(time + (TIMER_REZNYA * 1000))
+ 		end, 
+ 		function()
+-			spawn_body(obj)
++            -- Не удерживаем клиентский объект в отложенной функции.
++            local ok, target = pcall(function()
++                local simulator = alife()
++                if not simulator then return nil end
++                local server = simulator:object(target_id)
++                if not server or server.online ~= true then return nil end
++                if server:name() ~= target_name or server:section_name() ~= target_section then return nil end
++                local client = level.object_by_id(target_id)
++                if not client or client:name() ~= target_name or client:section() ~= target_section or client:alive() then return nil end
++                return client
++            end)
++            if ok and target then
++                spawn_body(target)
++            else
++                -- Если цель исчезла, возвращаем управление и штатный предмет слота.
++                pcall(function() release("rezalka") end)
++                pcall(function() if db.actor and not db.actor:object(DEFAULT_WPN) then spawn(DEFAULT_WPN) end end)
++                pcall(function() if db.actor then db.actor:activate_slot(0) end end)
++                pcall(function() if db.actor then db.actor:restore_weapon() end end)
++                pcall(function() level.enable_input() end)
++            end
+ 		end)
+ 	
+ end

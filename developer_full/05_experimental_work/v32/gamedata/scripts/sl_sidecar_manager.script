@@ -1,0 +1,134 @@
+-- Экспериментальный sidecar: хранит только скалярные копии без ссылок на объекты.
+local records = {}
+local current_level = nil
+local MAX_RECORDS = 512
+local MAX_BYTES = 262144
+local MAX_VALUE = 128
+local warned = false
+local function problem(text)
+    if not warned then
+        warned = true
+        pcall(function() if type(printf) == 'function' then printf('[GRM_SIDECAR] ERROR: %s', tostring(text)) end end)
+    end
+end
+local function valid_id(id)
+    return type(id)=='number' and id==math.floor(id) and id>=0 and id<65535
+end
+local function hex(s)
+    return (s:gsub('.', function(c) return string.format('%02X', string.byte(c)) end))
+end
+local function unhex(s)
+    if #s%2~=0 or #s>MAX_VALUE*2 or s:find('[^0-9A-F]') then return nil end
+    return (s:gsub('(%x%x)', function(c) return string.char(tonumber(c,16)) end))
+end
+local function valid_value(s)
+    return type(s)=='string' and #s>0 and #s<=MAX_VALUE and not s:find('[%z\r\n]')
+end
+local function filename(name)
+    if type(name)~='string' then return nil end
+    name=name:gsub('%.sav$', '')
+    if #name==0 or #name>80 or name:find('[^A-Za-z0-9_%-]') then return nil end
+    return name
+end
+local function path_for(name)
+    local clean=filename(name)
+    if not clean then return nil,'invalid save name' end
+    local ok, path=pcall(function() return getFS():update_path('$game_saves$', 'grm_project_data\\'..clean..'.txt') end)
+    if not ok or type(path)~='string' or #path==0 then return nil,'game_saves path unavailable' end
+    return path
+end
+function reset()
+    records={}; current_level=nil
+end
+function mark_hidden(obj)
+    local ok, id, section, name, map = pcall(function()
+        return obj:id(),obj:section(),obj:name(),level.name()
+    end)
+    if not ok or not valid_id(id) or not valid_value(section) or not valid_value(name) or not valid_value(map) then return false end
+    if current_level~=map then records={};current_level=map end
+    local n=0;for _ in pairs(records) do n=n+1 end
+    if not records[id] and n>=MAX_RECORDS then problem('record limit');return false end
+    records[id]={section=section,name=name,head_hidden=true}
+    return true
+end
+function forget(id)
+    if valid_id(id) then records[id]=nil end
+end
+function count()
+    local n=0;for _ in pairs(records) do n=n+1 end;return n
+end
+-- Явный вызов разрешён только после подтверждённой записи соответствующего сейва.
+-- Этот модуль сам не может подтвердить успешное завершение сохранения движком.
+function save_gore_data(save_name)
+    local path,reason=path_for(save_name);if not path then return false,reason end
+    if type(io)~='table' or type(io.open)~='function' then problem('io.open unavailable');return false,'io.open unavailable' end
+    if not valid_value(current_level) then return false,'no active level data' end
+    local ids={};for id in pairs(records) do ids[#ids+1]=id end;table.sort(ids)
+    local lines={'version=1','level='..hex(current_level),'count='..#ids}
+    for _,id in ipairs(ids) do local r=records[id];lines[#lines+1]='object_'..id..'='..hex(r.section)..'|'..hex(r.name)..'|1' end
+    lines[#lines+1]='end=1'
+    local text=table.concat(lines,'\n')..'\n';if #text>MAX_BYTES then return false,'file limit' end
+    local opened,f,err=pcall(io.open,path,'wb');if not opened or not f then problem(err or f or 'open failed');return false,'open failed' end
+    local ok,result=pcall(function() local w,e=f:write(text);if not w then error(e or 'write failed') end;local c,ce=f:close();if not c then error(ce or 'close failed') end;return true end)
+    if not ok then pcall(function() f:close() end);problem(result);return false,'write failed' end
+    return true,#ids
+end
+-- Это данные перед записью, а не подтверждённое сохранение и не привязка к слоту.
+-- Идентификаторы проверяются через реестр ALife; при ошибке поиска не делаем вывод об удалении.
+function prune_deleted()
+    local ok, simulator=pcall(function() return alife() end)
+    if not ok or not simulator then problem('ALife unavailable');return false end
+    local stale={}
+    for id in pairs(records) do
+        local found,object=pcall(function() return simulator:object(id) end)
+        if not found then problem('ALife lookup failed');return false end
+        if not object then
+            stale[#stale+1]=id
+        else
+            -- Проверяем повторно использованный ID по имени и секции.
+            local matches,identical=pcall(function()
+                return object:name()==records[id].name and object:section_name()==records[id].section
+            end)
+            if not matches then problem('ALife identity lookup failed');return false end
+            if not identical then stale[#stale+1]=id end
+        end
+    end
+    for _,id in ipairs(stale) do records[id]=nil end
+    return true,#stale
+end
+-- Вызывается в actor_binder:save ДО записи файла двигателем.
+-- Имя текущего сейва не известно: файл является неподтверждённым снимком.
+function before_save()
+    local pruned=prune_deleted()
+    if not pruned then return false,'lookup unavailable' end
+    if type(io)~='table' or type(io.open)~='function' then
+        reset()
+        problem('io.open unavailable; runtime records cleared')
+        return false,'io unavailable'
+    end
+    if not current_level then return false,'no runtime records' end
+    return save_gore_data('grm_runtime_unconfirmed')
+end
+-- Ошибка или отсутствие файла дают пустую таблицу; кости не меняются.
+function load_gore_data(save_name)
+    reset()
+    local path,reason=path_for(save_name);if not path then return false,reason end
+    if type(io)~='table' or type(io.open)~='function' then problem('io.open unavailable');return false,'io.open unavailable' end
+    local opened,f=pcall(io.open,path,'rb');if not opened or not f then return false,'missing or open failed' end
+    local ok,text=pcall(function() local n=f:seek('end');if not n or n>MAX_BYTES then error('size') end;f:seek('set',0);local s=f:read('*a');f:close();return s end)
+    if not ok or type(text)~='string' then pcall(function() f:close() end);return false,'read failed' end
+    if text:sub(-1)~='\n' then return false,'invalid ending' end
+    local lines={};for line in text:gmatch('([^\n]*)\n') do lines[#lines+1]=line end
+    if #lines<4 or lines[1]~='version=1' or lines[#lines]~='end=1' then return false,'invalid format' end
+    local level_hex=lines[2]:match('^level=([0-9A-F]+)$');local map=level_hex and unhex(level_hex)
+    local n=tonumber(lines[3]:match('^count=(%d+)$'))
+    if not valid_value(map) or not n or n>MAX_RECORDS or #lines~=n+4 then return false,'invalid header' end
+    local temp={}
+    for i=4,#lines-1 do
+        local id,s,nam=lines[i]:match('^object_(%d+)=([0-9A-F]+)|([0-9A-F]+)|1$')
+        id=tonumber(id);s=s and unhex(s);nam=nam and unhex(nam)
+        if not valid_id(id) or temp[id] or not valid_value(s) or not valid_value(nam) then return false,'invalid record' end
+        temp[id]={section=s,name=nam,head_hidden=true}
+    end
+    records=temp;current_level=map;return true,n
+end

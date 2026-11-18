@@ -1,0 +1,81 @@
+-- Experimental AKS-74U reload camera; no DLL changes.
+-- R key polling requires LuaJIT FFI on Windows. Fallback predicts empty-mag reload.
+local ID = 28750
+local ANIM = "grm_aksu_reload_cam\\ak74u_reload_timed.anm"
+local sections = {wpn_ak74u=true, wpn_ak74u_arena=true, wpn_ak74u_m1=true}
+local ffi_check_done, key_reader = false, nil
+local key_down, previous_id, previous_ammo = false, nil, nil
+local effect_id, until_at, last_time = nil, nil, nil
+local disabled = false
+local function stop()
+    if until_at then pcall(function() level.remove_cam_effector(ID) end) end
+    until_at=nil; effect_id=nil
+end
+function reset()
+    stop(); key_down=false; previous_id=nil; previous_ammo=nil; last_time=nil; disabled=false
+end
+local function init_input()
+    if ffi_check_done then return end
+    ffi_check_done=true
+    local ok, reader=pcall(function()
+        local ffi=require("ffi")
+        pcall(function() ffi.cdef("short __stdcall GetAsyncKeyState(int vKey);") end)
+        local user32=ffi.load("user32")
+        return function() return tonumber(user32.GetAsyncKeyState(0x52)) < 0 end
+    end)
+    if ok and type(reader)=="function" then
+        local ok2=pcall(reader)
+        if ok2 then key_reader=reader end
+    end
+    if not key_reader then
+        pcall(function() printf("[grm_aksu_reload_cam] no LuaJIT FFI: R detection unavailable, empty-mag prediction only") end)
+    end
+end
+local function read_key()
+    init_input()
+    if not key_reader then return false end
+    local ok, down=pcall(key_reader)
+    if not ok then key_reader=nil; return false end
+    return down
+end
+local function blocked(a)
+    if not a or not a:alive() or a:is_talking() or a.health<=0.20 then return true end
+    if device().precache_frame>0 or a:has_info("disabled_ui") then return true end
+    if shiza_hud_items and shiza_hud_items.is_using_item and shiza_hud_items.is_using_item() then return true end
+    if shiza_kill_stress and shiza_kill_stress.is_active and shiza_kill_stress.is_active() then return true end
+    if shiza_radiation and shiza_radiation.is_death_started and shiza_radiation.is_death_started() then return true end
+    if shiza_vodka and shiza_vodka.is_death_started and shiza_vodka.is_death_started() then return true end
+    return false
+end
+local function step(a)
+    if disabled then return end
+    local down=read_key()
+    local pressed=down and not key_down
+    key_down=down
+    if blocked(a) then stop();previous_id=nil;previous_ammo=nil;last_time=nil;return end
+    local now=time_global()
+    if last_time and now<last_time then stop();previous_id=nil;previous_ammo=nil end
+    last_time=now
+    if until_at and now>=until_at then until_at=nil;effect_id=nil end
+    local w=a:active_item()
+    if not w or not sections[w:section()] then stop();previous_id=nil;previous_ammo=nil;return end
+    local id=w:id()
+    local ammo=w:get_ammo_in_magazine()
+    local total=w:get_ammo_total()
+    if type(ammo)~="number" or type(total)~="number" then stop();previous_id=nil;previous_ammo=nil;return end
+    if previous_id~=id then stop();previous_id=id;previous_ammo=ammo;return end
+    -- GetAmmoCurrent includes the cartridges currently in the magazine.
+    local reserve=total-ammo
+    local empty_prediction=previous_ammo and previous_ammo>0 and ammo==0 and reserve>0
+    local manual_prediction=pressed and ammo<30 and reserve>0
+    if not until_at and (manual_prediction or empty_prediction) then
+        local duration=level.add_cam_effector(ANIM,ID,false,"")
+        if type(duration)~="number" or duration<0.1 or duration>10 then duration=3.93333 end
+        effect_id=id;until_at=now+math.ceil(duration*1000)
+    end
+    previous_ammo=ammo
+end
+function update(actor)
+    local ok,err=pcall(step,actor)
+    if not ok then stop();disabled=true;pcall(function() printf("[grm_aksu_reload_cam] disabled: %s",tostring(err)) end) end
+end

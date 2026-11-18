@@ -1,0 +1,11 @@
+--- /data/grm_transfer_stage/02_versions/user_latest_scripts/scripts/grm_gore_test.script
++++ /data/grm/v31/gamedata/scripts/grm_gore_test.script
+@@ -333,3 +333,8 @@
+         end
+     end
+ end
++
++-- Удаляем только скалярный ID из runtime-таблицы sidecar.
++function forget(id)
++    pcall(function() sl_sidecar_manager.forget(id) end)
++end

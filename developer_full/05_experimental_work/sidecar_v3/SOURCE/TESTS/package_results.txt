@@ -1,0 +1,1 @@
+PASS: script variants, source copies, hashes in installer, manager and folder layout

@@ -1,0 +1,104 @@
+-- Доступные динамические сообщения: 
+-- icon (string) - см. таблицу tips_icons
+-- sender (string) - имя отправителя (кириллица либо строка для трансляции)
+-- text (string) - текст сообщения (кириллица либо строка для трансляции)
+local MESSAGES =  {
+  [1] = { 
+	["icon"] = "stalker", 
+	["sender"] = "Палач", 
+	["text"] = "Хочу тепла и чувства спокойствия... им нет до этого дела.." 
+  },
+  [2] = { 
+	["icon"] = "freedom", 
+	["sender"] = "Садист", 
+	["text"] = "Я перезаряжаю оружие уже час. Патроны есть, рука трясётся. Но стрелять не в кого, кроме себя..." 
+  },
+  [3] = { 
+	["icon"] = "prizrak", 
+	["sender"] = "Молчун", 
+	["text"] = "Мои часы сломались вчера. Они показывают 23:59. И я знаю, что уже никогда не наступит полночь." 
+  }
+}
+
+-- Количество доступных сообщений
+local MSG_COUNT = #MESSAGES
+
+-- Длительность отрисовки сообщения (мс на символ сообщения)
+local MSG_SHOWTIME_PER_SYMBOL = 150
+
+-- Минимальный интервал между сообщениями (в мс)
+local MSG_MIN_TIMER = 180 * 1000
+
+-- Максимальный интервал между сообщениями (в мс)
+local MSG_MAX_TIMER = 300 * 1000
+
+-- Позиции иконок в файле ui\\ui_icons_task
+tips_icons = {
+	trader	 = {   0, 100 },
+	dolg     = { 150,   0 },
+	freedom  = {   0, 150 },
+	ecolog   = { 450, 100 },
+	arena    = { 350, 150 },
+	stalker  = { 100, 150 },
+	krot     = { 200,  50 },
+	barman   = { 400,  50 },
+	wolf	 = { 0, 50 },
+	o_soznanie = { 100, 50 },
+	monolith = { 100, 150 },
+    saharov  = { 450, 150 },
+    prizrak  = {   0,  50 },
+    killer   = {   0, 200 }
+}
+
+local last_msg_index = nil
+
+function send_msg()
+	if not db.actor then return end
+	
+	local msg_index = math.random(MSG_COUNT)
+	
+	-- Два раза подряд не отправляем то же сообщение. 
+	-- Можно сделать через цикл, но имхо скип лучше с точки зрения дополнительной рандомной паузы
+	if msg_index == last_msg_index then return end
+	last_msg_index = msg_index
+
+	local msg = MESSAGES[msg_index]
+	local icon = msg["icon"]
+	local sender = msg["sender"]
+	local text = msg["text"]
+	
+	if not sender then sender = "" end
+	if not text then text = "" end
+	
+	-- Выбираем иконку для сообщения
+	local x = 50
+	local y = 100
+	if tips_icons[icon] then
+		x = tips_icons[icon][1]
+		y = tips_icons[icon][2]
+	end
+	
+	-- Конкатенация + поиск транслированных строк
+	local news_text = "%c[255,160,160,160]"..game.translate_string(sender).."\\n".."%c[default]"..game.translate_string(text)
+	
+	-- Подсчитываем продолжительность отрисовки сообщения 
+	-- (даж при небольших смс будет запас за счет спецсимволов, не баг, а фича)
+	local showtime = MSG_SHOWTIME_PER_SYMBOL * string.len(news_text)
+	
+	db.actor:give_game_news(news_text, "ui\\ui_icons_task", Frect():set(x, y, 50, 50), 0, showtime)
+end
+
+function set_timer()
+	-- Взводим таймер до следующего сообщения
+	local sms_timer = time_global() + math.random(MSG_MIN_TIMER, MSG_MAX_TIMER)
+	level.add_call(
+		function ()
+			if sms_timer < time_global() then
+				return true
+			end
+		end,
+		function ()
+			send_msg()
+			set_timer()
+		end)
+end

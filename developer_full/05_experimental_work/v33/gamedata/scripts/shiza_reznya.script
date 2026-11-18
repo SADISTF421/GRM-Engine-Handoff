@@ -1,0 +1,271 @@
+-- # Скрипт расчленения для shiza мод
+-- # [XXX] 2026
+
+
+
+
+-- Время разделки в секундах
+local TIMER_REZNYA = 4.0
+
+--#+#
+local SLOT = 4
+local DEFAULT_WPN = "wpn_binoc"
+local FAKE_WEAPON = "rezalka"
+--Нулевой вектор
+local VECTOR_ZERO = vector():set(0, 0, 0)
+--Затемнение, чтобы убрать труп 
+local FADE_EFFECT = "fade_out.ppe"
+--Анимация камеры разделки
+local HARVEST_ANIMATION = "camera_effects\\harvest_lean_down_main.anm"
+--Звук разделки
+local HARVEST_SOUND = "crit_sound\\harvest_use"
+--#+#
+
+
+-- Время поедания в секундах
+local TIMER_EAT = 0.5
+
+
+-- Предметы для спавна: секция, макс. кол-во
+local spawn_items =
+{
+	{ "fake_bolt", 1 },
+	{ "meatreznya", 1 }
+}
+
+-- Секция подспавненного трупа
+local SECTION_DEADBODY = "reznya_trup_base"
+
+-- Секция фейкового мяса, что будет съедено
+local SECTION_OBJ_TO_EAT = "reznya_trup_meat"
+
+
+
+function need_drop(npc, item)
+	if not npc or not item then 
+		return false 
+	end
+    local section = item:section()
+    if section == "bolt" then
+        return false
+    end
+	npc:drop_item(item)
+	return true
+end
+
+
+
+local function spawn(section)
+	if not section then return end
+	local actor = db.actor
+	local obj = alife():create(section, VECTOR_ZERO, actor:level_vertex_id(), actor:game_vertex_id(), actor:id())
+	return obj
+end
+	
+local function release(section)
+	if not section then return end
+	
+	local c_obj = db.actor:object(section)
+	
+	if not c_obj then return end
+	local s_obj = alife():object(c_obj:id())
+	
+	
+	alife():release(s_obj, true)
+end
+
+
+
+--Забираем нож, спавним фейковый с анимками
+local function play_harvest_animation()
+	local actor = db.actor
+	
+	if actor:active_slot() ~= SLOT then
+		actor:activate_slot(SLOT)
+	end
+	
+	release(DEFAULT_WPN)
+	spawn(FAKE_WEAPON)
+end
+
+local function harvest_timer(delay)
+	return time_global() > delay
+end
+
+--Спавним труп, подменяем
+local function spawn_body(obj)
+	local pos = obj:position()
+	local lv = obj:level_vertex_id()
+	local gv = obj:game_vertex_id()
+	local actor_position = db.actor:position()
+	local time = time_global()
+
+
+	level.add_pp_effector(FADE_EFFECT, 1488, false)
+	obj:iterate_inventory(need_drop, obj)
+    sl_rotting.forget(obj)
+    pcall(function() grm_gore_test.forget(obj:id()) end)
+	alife():release(alife():object(obj:id()), true)
+	
+	for k, v in pairs(spawn_items) do
+		if type(v[1]) == "string" and type(v[2]) == "number" and v[2] > 0 then
+			for i = 1, math.random(v[2]) do
+				spawn(v[1])
+			end
+		end
+	end
+	
+	local trup = alife():create(SECTION_DEADBODY, pos, lv, gv)
+	
+	-- Взводим таймер, после которого проигрываем эффекты и возвращаем управление
+	-- Телепортируем актора на предыдущее место, если его оттолкнула коллизия нового трупа
+	db.actor:set_actor_position(actor_position)
+	db.actor:hide_weapon()
+	
+	level.add_call(
+		function() 
+			return time_global() > time + 10
+		end, 
+		function() 
+			release("rezalka")
+			spawn(DEFAULT_WPN) 
+			db.actor:activate_slot(0)
+		end)
+
+			-- Возвращаем управление
+
+	db.actor:restore_weapon()	
+	level.enable_input()
+			-- Эффектор "че я натворил"
+			--level.add_pp_effector("psychic.ppe", 1489, false)
+						
+			-- Проигрываем партиклы
+			--particles_object("anomaly2\\body_tear_01"):play_at_pos(pos)
+			--particles_object("anomaly2\\body_tear_00"):play_at_pos(pos)		
+						
+			-- Проигрываем звук
+			--local sound_use_2 = sound_object("ambient\\random\\rnd_the_horror"..tostring(math.random(1, 4)))
+			--sound_use_2:play_at_pos(db.actor, vector():set(0, 0, 0), 0, sound_object.s2d)
+
+end
+
+function piter_moment(obj)
+
+	if not obj then return end
+    -- Отделяем только запись runtime; физику и рендер движка не меняем.
+    pcall(function() grm_gore_test.forget(obj:id()) end)
+    local target_id, target_name, target_section = obj:id(), obj:name(), obj:section()
+    sl_rotting.begin_harvest(obj)
+	
+	local time = time_global()
+	
+	math.randomseed(device():time_global())
+
+	level.disable_input()
+
+level.add_pp_effector("psih.ppe", 1492, false)
+
+play_harvest_animation()
+
+level.add_cam_effector("camera_effects\\harvest_lean_down_main.anm", 1500, false)
+
+level.add_call(
+    function()
+        return time_global() > time + 1000 -- через 1 секунду
+    end,
+    function()
+        level.add_cam_effector("camera_effects\\harvest_lean_down_main2.anm", 1501, false)
+    end
+)
+	local sound_use = xr_sound.get_safe_sound_object(HARVEST_SOUND)
+	sound_use:play_at_pos(db.actor, VECTOR_ZERO, 0, sound_object.s2d)
+	
+	level.add_call(
+		function() 
+			return harvest_timer(time + (TIMER_REZNYA * 1000))
+		end, 
+		function()
+            -- Не удерживаем клиентский объект в отложенной функции.
+            local ok, target = pcall(function()
+                local simulator = alife()
+                if not simulator then return nil end
+                local server = simulator:object(target_id)
+                if not server or server.online ~= true then return nil end
+                if server:name() ~= target_name or server:section_name() ~= target_section then return nil end
+                local client = level.object_by_id(target_id)
+                if not client or client:name() ~= target_name or client:section() ~= target_section or client:alive() then return nil end
+                return client
+            end)
+            if ok and target then
+                spawn_body(target)
+            else
+                -- Если цель исчезла, возвращаем управление и штатный предмет слота.
+                pcall(function() release("rezalka") end)
+                pcall(function() if db.actor and not db.actor:object(DEFAULT_WPN) then spawn(DEFAULT_WPN) end end)
+                pcall(function() if db.actor then db.actor:activate_slot(0) end end)
+                pcall(function() if db.actor then db.actor:restore_weapon() end end)
+                pcall(function() level.enable_input() end)
+            end
+		end)
+	
+end
+
+function eat_moment(obj)
+	if not obj then return end
+	
+	local pos = obj:position()
+	
+	-- Обновляем ГПСЧ
+	math.randomseed(device():time_global())
+	
+	-- Отключаем взаимодействие с управлением
+	level.disable_input()
+	
+	-- Эффектор
+	level.add_pp_effector("surge_shock.ppe", 1490, false)
+	
+	-- Прячем оружие
+	db.actor:hide_weapon()
+	
+	-- Проигрываем партикл
+	particles_object("anomaly2\\body_tear_01"):play_at_pos(pos)
+	
+	-- Спавним фейк предмет
+	alife():create(SECTION_OBJ_TO_EAT, db.actor:position(), db.actor:level_vertex_id(), db.actor:game_vertex_id(), db.actor:id())
+				
+	-- Проигрываем звук разделки
+	local sound_use = sound_object("monsters\\zombie\\zombie_eat_"..tostring(math.random(0, 3)))
+	sound_use:play_at_pos(db.actor, VECTOR_ZERO, 0, sound_object.s2d)
+
+
+	-- Взводим таймер, после которого проигрываем эффекты и возвращаем управление
+	local nextUpdate = time_global() + (TIMER_EAT * 1000)
+	level.add_call(
+		function () if nextUpdate < time_global() then return true end end,
+		function ()
+			-- Возвращаем отрисовку оружия
+			db.actor:restore_weapon()
+		
+			-- Возвращаем управление
+			level.enable_input()
+		
+			-- Эффектор "че я натворил"
+			--level.add_pp_effector("psychic.ppe", 1489, false)
+						
+			-- Проигрываем партикл
+			particles_object("anomaly2\\body_tear_00"):play_at_pos(pos)		
+						
+			-- Проигрываем звук
+			--local sound_use_2 = sound_object("ambient\\random\\rnd_the_horror"..tostring(math.random(1, 4)))
+			--sound_use_2:play_at_pos(db.actor, vector():set(0, 0, 0), 0, sound_object.s2d)
+			
+			-- Хаваем фейк предмет
+			db.actor:eat(db.actor:object(SECTION_OBJ_TO_EAT))
+			
+			-- Убираем тело
+			pcall(function() grm_gore_test.forget(obj:id()) end)
+			alife():release(alife():object(obj:id()), true)
+		end
+	)
+end
+

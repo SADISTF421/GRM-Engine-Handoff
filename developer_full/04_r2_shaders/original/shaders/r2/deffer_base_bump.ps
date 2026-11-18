@@ -1,0 +1,55 @@
+#include "common.h"
+#if defined(USE_LM_HEMI) && defined(USE_PARALLAX)
+#include "grm_sload_landscape.h"
+#else
+#include "sload.h"
+#endif
+#include "f42_weather.h"
+
+f_deffer 	main	( p_bumped I )
+{
+  f_deffer	O;
+
+  surface_bumped 	S 	= sload 	(I);
+
+  // Sample normal, rotate it by matrix, encode position 
+  half3 Ne				= mul       (half3x3(I.M1, I.M2, I.M3), S.normal);
+		Ne				= normalize	(Ne);
+
+
+	// hemi,sun,material
+	half 	ms	= xmaterial		;
+#ifdef USE_LM_HEMI
+	half4	lm 	= tex2D			(s_hemi, I.lmh);
+	half 	h  	= dot			(lm.rgb,1.h/3.h);
+# ifdef USE_R2_STATIC_SUN
+		 	ms 	= lm.w;
+# endif
+#else
+	half 	h	= ((I.position.w < -1.5f) ? (-I.position.w - 2.0f) : I.position.w)	;
+# ifdef USE_R2_STATIC_SUN
+		 	ms	= I.tcdh.w		;
+# endif
+#endif
+
+#ifdef USE_LM_HEMI
+	// Мокрый блеск только на поверхностях с картой освещённости.
+	// Открытость оценивается приблизительно: это не точная проверка крыши.
+	float3 grm_n_world = mul((float3)Ne, (float3x3)m_V);
+	half grm_open = smoothstep(0.20h, 0.70h, saturate(h));
+	half grm_up = (half)smoothstep(-0.10f, 0.80f, grm_n_world.y);
+	half grm_wet = f42_weather_wetness() * grm_open * (0.35h + 0.65h * grm_up);
+	S.base.xyz *= 1.0h - 0.08h * grm_wet;
+	S.gloss = lerp(S.gloss, max(S.gloss, 0.28h), 0.65h * grm_wet);
+#endif
+
+	O.Ne 		= half4		(Ne, 										h		);
+	O.position  = half4 	(I.position.xyz + Ne*S.height*def_virtualh, ms		);
+	O.C			= half4		(S.base.xyz, 								S.gloss	);							// OUT: rgb.gloss
+
+  // SL_MODEL_SPEC_TEST1: suppress only tagged model G-buffer gloss.
+  // RGB, normals, material/sun and restored hemi are unchanged.
+  O.C.w *= (I.position.w < -1.5f) ? 0.0h : 1.0h;
+
+  return O;
+}

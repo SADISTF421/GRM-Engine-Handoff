@@ -1,0 +1,83 @@
+-- ============================================
+-- САМОУБИЙСТВО ПО НОЖУ (с правильным уроном)
+-- ============================================
+
+printf("[SUICIDE] Loading...")
+
+local suicide_active = false
+local suicide_time = 0
+local last_item = ""
+
+function update_suicide()
+    if not db.actor or not db.actor:alive() then return end
+    
+    local item = db.actor:active_item()
+    if not item then return end
+    
+    local section = tostring(item:section() or "")
+    
+    if section ~= last_item then
+        last_item = section
+        
+        if string.find(section, "knife") or string.find(section, "wpn_knife") then
+            suicide_active = true
+            suicide_time = time_global()
+            printf("[SUICIDE] Knife equipped! Death in 3 seconds...")
+            news_manager.send_tip(db.actor, "Нож активирован! Смерть через 3 секунды...", 3, "ui_pda")
+        else
+            if suicide_active then
+                suicide_active = false
+                printf("[SUICIDE] Cancelled")
+                news_manager.send_tip(db.actor, "Самоубийство отменено", 2, "ui_pda")
+            end
+        end
+    end
+    
+    if suicide_active then
+        local elapsed = time_global() - suicide_time
+        if elapsed >= 3000 then
+            suicide_active = false
+            
+            printf("[SUICIDE] ===== SUICIDE EXECUTING =====")
+            
+            -- Убираем оружие
+            db.actor:hide_weapon()
+            
+            -- НАНЕСЕНИЕ УРОНА (несколько способов для гарантии)
+            
+            -- Способ 1: hit с большим уроном
+            local h = hit()
+            h.power = 10000      -- ОГРОМНЫЙ урон
+            h.impulse = 0
+            h.type = hit.wound   -- меняем тип на wound (огнестрельная рана)
+            h.direction = vector():set(0, 0, 0)
+            h.draftsman = db.actor
+            db.actor:hit(h)
+            printf("[SUICIDE] Hit applied: power=10000, type=wound")
+            
+            -- Способ 2: прямой hit (другой тип)
+            db.actor:hit(10000, hit.fire_wound, "bip01_head", vector():set(0,0,0), 0)
+            printf("[SUICIDE] Direct hit applied")
+            
+            -- Способ 3: уменьшаем здоровье в 0
+            db.actor.health = 0
+            printf("[SUICIDE] Health set to 0")
+            
+            -- Способ 4: радиация для надежности
+            db.actor.radiation = 1.0
+            
+            printf("[SUICIDE] Final health: %.2f", db.actor.health)
+            
+            news_manager.send_tip(db.actor, "ВЫ УБИЛИ СЕБЯ!", 5, "ui_pda")
+            printf("[SUICIDE] ===== SUICIDE COMPLETED =====")
+            
+        else
+            local remaining = math.ceil((3000 - elapsed) / 1000)
+            if remaining > 0 and remaining < 4 then
+                news_manager.send_tip(db.actor, string.format("Смерть через %d...", remaining), 1, "ui_pda")
+            end
+        end
+    end
+end
+
+printf("[SUICIDE] Script ready. Equip knife to die after 3 seconds")

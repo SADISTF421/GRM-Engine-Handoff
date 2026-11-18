@@ -1,0 +1,16 @@
+﻿СТАТУС МОДУЛЕЙ; ЭТО НЕ ЧИТАЕМЫЙ ИГРОЙ ФАЙЛ КОНФИГУРАЦИИ
+script_task_header_check = implemented_test
+script_selected_quiet_logs = implemented_test
+save_guard_client = unavailable
+save_guard_server = unavailable
+net_packet_bounds = unavailable
+reader_writer_bounds = unavailable
+atomic_autosave = unavailable
+sidecar_gore = unavailable
+runtime_gore_cache = unchanged
+physics_restore_validation = unavailable
+validator_deep = unavailable
+repair = unavailable
+big_packet_16384 = disabled
+corpse_headshots_flag = unavailable; original script unchanged
+model_changes = prohibited

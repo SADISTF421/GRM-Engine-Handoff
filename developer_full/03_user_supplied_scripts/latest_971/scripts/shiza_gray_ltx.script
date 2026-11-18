@@ -1,0 +1,113 @@
+-- Direct CScriptEffector, supported by the supplied SoC/GRM binary.
+-- No PPE animator or set_pp_effector_factor is used for withdrawal grayscale.
+local EFFECT_ID = 7813
+local SECTION = "syringe_withdrawal_gray"
+local CONFIG = "misc\\postprocess.ltx"
+local settings = nil
+local strength = 0
+local active = false
+local native_ref = nil
+
+-- Keep working with the ordinary postprocess.ltx, even if our section was
+-- removed or a clean-install archive did not include that optional section.
+local function default_settings()
+    return {gray=1.0, blur=0.0, dual_h=0.0, dual_v=0.0,
+        noise_intensity=0.0, noise_grain=1.0, noise_fps=30.0,
+        base={0.5,0.5,0.5}, gray_color={0.333,0.333,0.333}, add={0,0,0}}
+end
+local function read_number(ini, key, fallback)
+    if not ini:line_exist(SECTION, key) then return fallback end
+    local value = tonumber(ini:r_string(SECTION, key))
+    if not value or value ~= value or value == math.huge or value == -math.huge then
+        return fallback
+    end
+    return value
+end
+local function read_color(ini, key, fallback)
+    if not ini:line_exist(SECTION, key) then return fallback end
+    local values = {}
+    for value in string.gmatch(ini:r_string(SECTION, key), "[^,]+") do
+        local number = tonumber(value)
+        if not number or number ~= number or number == math.huge or number == -math.huge then
+            return fallback
+        end
+        values[#values + 1] = number
+    end
+    if #values ~= 3 then return fallback end
+    return values
+end
+function load_settings()
+    if settings then return end
+    local ini = ini_file(CONFIG)
+    settings = default_settings()
+    if not ini:section_exist(SECTION) then return end
+    settings.gray = math.max(0, math.min(1, read_number(ini, "gray", settings.gray)))
+    settings.blur = read_number(ini, "blur", settings.blur)
+    settings.dual_h = read_number(ini, "duality_h", settings.dual_h)
+    settings.dual_v = read_number(ini, "duality_v", settings.dual_v)
+    settings.noise_intensity = read_number(ini, "noise_intensity", settings.noise_intensity)
+    settings.noise_grain = math.max(0.01, read_number(ini, "noise_grain", settings.noise_grain))
+    settings.noise_fps = math.max(1, read_number(ini, "noise_fps", settings.noise_fps))
+    settings.base = read_color(ini, "color_base", settings.base)
+    settings.gray_color = read_color(ini, "color_gray", settings.gray_color)
+    settings.add = read_color(ini, "color_add", settings.add)
+end
+
+class "syringe_gray_ltx_effector" (effector)
+function syringe_gray_ltx_effector:__init() super(EFFECT_ID, 1000000000)
+end
+function syringe_gray_ltx_effector:process(pp)
+    effector.process(self, pp)
+    local d = strength
+    -- Set the complete neutral->configured SPPInfo, not just the gray field.
+    -- Native gray is assigned directly each frame; there is no animator factor.
+    pp.gray = settings.gray * d
+    pp.blur = settings.blur * d
+    local dual = duality()
+    dual.h = settings.dual_h * d
+    dual.v = settings.dual_v * d
+    pp.dual = dual
+    local n = noise()
+    n.intensity = settings.noise_intensity * d
+    n.grain = settings.noise_grain
+    n.fps = settings.noise_fps
+    pp.noise = n
+    local base = color()
+    base.r = 0.5 + (settings.base[1] - 0.5) * d
+    base.g = 0.5 + (settings.base[2] - 0.5) * d
+    base.b = 0.5 + (settings.base[3] - 0.5) * d
+    pp.color_base = base
+    local gray = color()
+    gray.r = 0.333 + (settings.gray_color[1] - 0.333) * d
+    gray.g = 0.333 + (settings.gray_color[2] - 0.333) * d
+    gray.b = 0.333 + (settings.gray_color[3] - 0.333) * d
+    pp.color_gray = gray
+    local add = color()
+    add.r = settings.add[1] * d
+    add.g = settings.add[2] * d
+    add.b = settings.add[3] * d
+    pp.color_add = add
+    -- Keep processing indefinitely; the syringe controller removes explicitly.
+    return true
+end
+function set_factor(value)
+    strength = math.max(0, math.min(1, value))
+    if strength <= 0 then
+        if active then level.remove_pp_effector(EFFECT_ID) end
+        active = false
+        native_ref = nil
+        return
+    end
+    load_settings()
+    if not active then
+        native_ref = syringe_gray_ltx_effector()
+        native_ref:start()
+        active = true
+    end
+end
+function reset()
+    strength = 0
+    if active then level.remove_pp_effector(EFFECT_ID) end
+    active = false
+    native_ref = nil
+end

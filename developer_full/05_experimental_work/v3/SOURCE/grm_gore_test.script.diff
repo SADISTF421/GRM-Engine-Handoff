@@ -1,0 +1,72 @@
+--- base/grm_gore_test.script
++++ v3/grm_gore_test.script
+@@ -25,7 +25,7 @@
+ local function setup()
+     if not attempted then
+         attempted = true
+-        notice("ENGINE BONE MODE")
++        pcall(function() if type(printf) == "function" then printf("[GRM_GORE] runtime started") end end)
+     end
+     return true
+ end
+@@ -124,6 +124,28 @@
+ -- Повторно используем только частицы текущего экземпляра игрока и уровня.
+ -- У каждой частицы одна сильная ссылка; работающие частицы не уничтожаются.
+ local particle_pool = {}
++-- Лимит относится только к частицам отрыва головы, не к чужим системам.
++local MAX_ACTIVE_GORE_PARTICLES = 16
++local function gore_particle_count()
++    local count = 0
++    for key, pool in pairs(particle_pool) do
++        if key:sub(1, 5) == "gore:" then count = count + #pool end
++    end
++    return count
++end
++
++-- Только локальные маркеры конкретного NPC. Состояние скрытой головы в движке не трогаем.
++function reset_binder(binder)
++    if not binder then return end
++    binder.grm_gore_test = nil
++    binder.grm_gore_aim = nil
++    binder.grm_gore_aim_next = nil
++    binder.grm_gore_pending = nil
++    binder.grm_gore_blood = nil
++    binder.grm_gore_anchored = nil
++    binder.grm_gore_refresh = nil
++    binder.grm_gore_map = nil
++end
+ local particle_actor, particle_level, particle_sweep = nil, nil, 0
+ local particle_limits = {
+     ["grm_restore\\suicide_backup_head"] = 8,
+@@ -158,16 +180,18 @@
+         if #pool == 0 then particle_pool[effect] = nil end
+     end
+ end
+-function particle_at(effect, pos)
++function particle_at(effect, pos, gore_owned)
+     if not pos or not particle_sync() then return false end
+     local now = time_global()
+-    local pool = particle_pool[effect]
+-    if not pool then pool = {}; particle_pool[effect] = pool end
++    local key = (gore_owned and "gore:" or "shared:") .. effect
++    local pool = particle_pool[key]
++    if not pool then pool = {}; particle_pool[key] = pool end
+     local entry = nil
+     for _, candidate in ipairs(pool) do
+         if not candidate.fx:playing() then entry = candidate; break end
+     end
+-    if not entry and #pool < (particle_limits[effect] or 0) then
++    if not entry and #pool < (particle_limits[effect] or 0)
++        and (not gore_owned or gore_particle_count() < MAX_ACTIVE_GORE_PARTICLES) then
+         local fx = particles_object(effect)
+         if fx then entry = {fx = fx, started = now}; pool[#pool + 1] = entry end
+     end
+@@ -180,7 +204,7 @@
+     local ok, err = pcall(function()
+         local neck = npc:bone_position("bip01_neck")
+         if not neck then return end
+-        particle_at(effect, vector():set(neck.x, neck.y, neck.z))
++        particle_at(effect, vector():set(neck.x, neck.y, neck.z), true)
+     end)
+     if not ok then notice("PARTICLE ERROR " .. tostring(err)) end
+ end

@@ -1,0 +1,18 @@
+--- /data/grm_transfer_stage/02_versions/original_shaders/shaders/r2/combine_2_aa.ps
++++ /data/grm_transfer_stage/02_versions/r2_01_near_focus/gamedata/shaders/r2/combine_2_aa.ps
+@@ -2,6 +2,7 @@
+ #include "mblur.h"
+ #include "grm_mood_grade.h"
+ #include "grm_foreground_glitch.h"
++#include "grm_near_focus_test.h"
+ 
+ struct 	v2p
+ {
+@@ -170,6 +171,7 @@
+   half4 	s3 	=  tex2D	(s_image, offset + I.tc4*w);
+ 
+   half3 grm_scene = (s0+s1+s2+s3)/4.h;
++  grm_scene = grm_near_focus(grm_scene, I.tc0.xy, center, dc.xyz);
+   grm_scene = grm_ssfx_sharp(grm_scene, I.tc0.xy, center, dc.xyz);
+   grm_scene = grm_puddle_reflection(grm_scene, I.tc0.xy, dc.xyz, nc);
+   grm_scene = grm_darkscape_ghost(grm_scene, I.tc0.xy, center);

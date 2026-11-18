@@ -1,0 +1,17 @@
+[
+  {
+    "name": "task_manager.script",
+    "old": "fdb96acef7e9127e21c13e0795dc5d80086ab00a6512dc28a547575f5b51c84e",
+    "new": "51fab23ce33aa62aff415446701c34e37407ef4b28b09ac7c400c9988605f97c"
+  },
+  {
+    "name": "bind_stalker.script",
+    "old": "39c907d9f4c215559dfa82e9cc250b9d462930c0b496eafc422bc76c0de19cb9",
+    "new": "2a7bba2236092e335d69018b20b748e602a8f4b55c6b7c0682585af995135ba1"
+  },
+  {
+    "name": "xr_motivator.script",
+    "old": "47474418ea714dc25c646915af7144eb20f2f98abe6bc415cc5cce0d096a48bc",
+    "new": "e1377dc896c2bac0d65682d27844704b54c0edf50115936cf8fefc2852c4407a"
+  }
+]

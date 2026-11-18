@@ -1,0 +1,107 @@
+local TEST_SECTION = "shiza_head_proxy_test"
+local HEAD_BONE_ID = 13
+local DEATH_WINDOW_MS = 1200
+local DELAY_MS = 700
+local SPAWN_TIMEOUT_MS = 4000
+local DISPLAY_MS = 8000
+local last_hits = {}
+local attempted = false
+
+local function notify(text)
+    if db and db.actor then
+        pcall(function() db.actor:give_game_news(text, "ui\\ui_iconsTotal", Frect():set(83,470,83,47), 0, 7000) end)
+    end
+end
+local function get_id(obj)
+    if not obj then return nil end
+    local ok, id = pcall(function() return obj:id() end)
+    if ok then return tonumber(id) end
+    return nil
+end
+local function client(id)
+    local ok, obj = pcall(function() return level.object_by_id(id) end)
+    return ok and obj or nil
+end
+local function remove_proxy(id)
+    if not id then return end
+    pcall(function()
+        local server = alife():object(id)
+        if server then alife():release(server, true) end
+    end)
+end
+local function wait_until(condition, action)
+    level.add_call(condition, function()
+        local ok, err = pcall(action)
+        if not ok then notify("HEAD TEST: script error; reload test save") end
+    end)
+end
+
+function on_hit(npc, who, bone_index)
+    if attempted then return end
+    local id = get_id(npc)
+    if not id then return end
+    local actor_id = get_id(db and db.actor)
+    if actor_id and get_id(who) == actor_id and tonumber(bone_index) == HEAD_BONE_ID then
+        last_hits[id] = time_global()
+    else
+        last_hits[id] = nil
+    end
+end
+
+function on_death(npc, who)
+    if attempted then return end
+    local id = get_id(npc)
+    if not id then return end
+    local at_hit = last_hits[id]
+    last_hits[id] = nil
+    local actor_id = get_id(db and db.actor)
+    if not at_hit or not actor_id or get_id(who) ~= actor_id then return end
+    local age = time_global() - at_hit
+    if age < 0 or age > DEATH_WINDOW_MS then return end
+    attempted = true
+    local when = time_global() + DELAY_MS
+    notify("HEAD TEST: headshot registered")
+    wait_until(function() return time_global() >= when end, function()
+        local corpse = client(id)
+        if not corpse then notify("HEAD TEST: corpse unavailable") return end
+        local alive_ok, alive = pcall(function() return corpse:alive() end)
+        if not alive_ok or alive then notify("HEAD TEST: NPC not dead") return end
+        local section_ok, has_section = pcall(function() return system_ini():section_exist(TEST_SECTION) end)
+        if not section_ok or not has_section then notify("HEAD TEST: missing config include") return end
+        local create_ok, proxy = pcall(function()
+            return alife():create(TEST_SECTION, corpse:position(), corpse:level_vertex_id(), corpse:game_vertex_id())
+        end)
+        if not create_ok or not proxy then notify("HEAD TEST: spawn failed") return end
+        local id_ok, proxy_id = pcall(function() return tonumber(proxy.id) end)
+        if not id_ok or not proxy_id then notify("HEAD TEST: bad proxy ID; reload test save") return end
+        local deadline = time_global() + SPAWN_TIMEOUT_MS
+        wait_until(function() return client(proxy_id) ~= nil or time_global() >= deadline end, function()
+            local dummy, real = client(proxy_id), client(id)
+            if not dummy or not real then
+                remove_proxy(proxy_id)
+                notify("HEAD TEST: proxy/corpse not online")
+                return
+            end
+            pcall(function() dummy:set_nonscript_usable(false) end)
+            local hidden = pcall(function() real:set_visual_hidden(true) end)
+            if not hidden then
+                remove_proxy(proxy_id)
+                notify("HEAD TEST: hide failed")
+                return
+            end
+            notify("HEAD TEST: proxy shown for 8 sec")
+            local restore_at = time_global() + DISPLAY_MS
+            wait_until(function() return time_global() >= restore_at end, function()
+                local old = client(id)
+                if old then
+                    local ok = pcall(function() old:set_visual_hidden(false) end)
+                    if not ok then notify("HEAD TEST: restore failed; reload test save") end
+                else
+                    notify("HEAD TEST: corpse offline; reload test save")
+                end
+                remove_proxy(proxy_id)
+                if old then notify("HEAD TEST: proxy removed; check loot") end
+            end)
+        end)
+    end)
+end

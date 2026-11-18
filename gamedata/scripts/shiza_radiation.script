@@ -1,0 +1,618 @@
+-- Игровые userdata не сравниваем напрямую: у обёрток может не быть __eq.
+-- Для проверки владельца используем числовой ID; отмена операций — по поколению.
+local function same_actor(a,b)
+    return a and b and a:id()==b:id()
+end
+local session_generation = 0
+local function add_session_call(condition, action)
+    local token = session_generation
+    level.add_call(
+        function() return token ~= session_generation or condition() end,
+        function() if token == session_generation then action() end end)
+end
+
+ -- # Скрипт радиации для shiza мод
+-- # [XXX] 2026
+
+-- Название .ppe при высокой радиации
+local RADIATION_PPE_NAME = "total_recall.ppe"
+
+-- Название .ppe при передозе антирадами
+local ANTIRAD_PPE_NAME = "dead_zone2.ppe"
+
+-- Через сколько мс откатится счётчик юза таблеток
+local ANTIRAD_USE_TIMER = 45 * 1000
+
+
+--#+# Через сколько секунд будет суицид, если слишком высокий порог радиации
+local SUICIDE_TIMER = 10 * 1000
+--Критический уровень радиации после которого начинается таймер 
+local RADIATION_MAX_LEVEL = 0.7
+--Хп, после которого может произойти суицид
+local MIN_HEALTH_SUICIDE = 0.6
+
+local VECTOR_ZERO = vector():set(0,0,0)
+--local HUD_STATIC
+
+--Звуки суицида
+local SUICIDE_SOUND_START = "crit_sound\\suicide_start"
+-- Анимации камеры суицида
+local SUICIDE_ANIM_KICK = "camera_effects\\knife_suicide_kick.anm"
+local SUICIDE_ANIM_DRAW = "camera_effects\\knife_suicide_draw.anm"
+local SUICIDE_ANIM_SHAKE = "camera_effects\\tryska60.anm"
+local SUICIDE_ANIM_FALL = "camera_effects\\smert.anm"
+local SUICIDE_ANIM_BREATH = "camera_effects\\dyhanie.anm"
+
+-- Резкое движение ножа в модели — около кадра 224 при 30 кадрах/с.
+local SUICIDE_ANIM_KICK_TIME = math.floor(224 * 1000 / 30 + 0.5)
+-- 17 кадров / 30 FPS = 0.567 сек
+local SUICIDE_ANIM_FALL_TIME = 567
+
+-- Сцена смерти от передозировки антирада
+-- Используется существующая анимация падения игрока.
+local ANTIRAD_DEATH_ANIM = "camera_effects\\smert.anm"
+local ANTIRAD_DEATH_SOUND = "crit_sound\\memory2"
+-- Длину камеры сообщает движок; не полагаемся на противоречивые числа кадров.
+local ANTIRAD_DEATH_DELAY = 450 -- запасное значение; ниже используется фактическая длина камеры
+
+local SLOT = 4
+local BASE_WEAPON = "wpn_binoc"
+local ANIM_SUICIDE_KNIFE = "suicide_knife_usable"
+
+local _current_radiation_time = 0
+local _is_suicided = false
+-- Нож виден всю сцену суицида; для остальных сцен смерти руки скрыты.
+local suicide_knife_visible = false
+-- Стадии: 0 — обычная игра, 1 — подготовка ножа, 2 — сцена ножа, 3 — антирад.
+local terminal_kind, terminal_until = 0, 0
+local kick_at, fall_at = -1, -1
+local pending_state = nil
+local antirad_scene_sound = nil
+
+
+
+-- // # Не трогать
+local phantom_idle = nil
+local phantom_max = 8
+local phantom_spawn_radius = 30.0
+local phantom_fov = 45
+local phantom_time = 0
+local radiation_ppe_enabled = false
+local antirad_ppe_enabled = false
+local panic_sound = nil
+local counter = 0
+local antirad_reset_time = 0
+local antirad_reset_scheduled = false
+
+-- Отдельное накопление от мяса: не добавляет нативный радиационный урон.
+local MEAT_SHIZA_CORPSE = 0.03
+local MEAT_SHIZA_PORTION = 0.04
+local MEAT_SHIZA_DECAY_DELAY = 90 * 1000
+local MEAT_SHIZA_DECAY_PER_SECOND = 0.002
+local meat_shiza = 0
+local meat_decay_after = 0
+local meat_last_update = nil
+local function update_meat_shiza()
+    local now = time_global()
+    if meat_last_update and now > meat_decay_after then
+        local elapsed = math.max(0, now - math.max(meat_last_update, meat_decay_after))
+        meat_shiza = math.max(0, meat_shiza - elapsed * MEAT_SHIZA_DECAY_PER_SECOND / 1000)
+    end
+    meat_last_update = now
+end
+
+function on_meat_eaten(section)
+    if not db.actor or not db.actor:alive() then return end
+    local amount
+    if section == "reznya_trup_meat" then amount = MEAT_SHIZA_CORPSE
+    elseif section == "meat_usable" then amount = MEAT_SHIZA_PORTION
+    else return end
+    update_meat_shiza()
+    meat_shiza = math.min(1, meat_shiza + amount)
+    meat_decay_after = time_global() + MEAT_SHIZA_DECAY_DELAY
+end
+
+function get_meat_shiza() return meat_shiza end
+
+-- Маленький бонус только за полностью завершённую новую пачку: 1 пункт из 100.
+local CIGARETTE_SHIZA_RELIEF = 0.01
+function on_cigarette_pack_finished()
+    restore_pending()
+    if not db.actor or not db.actor:alive() or _is_suicided then return false end
+    update_meat_shiza()
+    meat_shiza = math.max(0, meat_shiza - CIGARETTE_SHIZA_RELIEF)
+    return true
+end
+
+
+-- // # Спавн фантомов, спизжен из sr_psy_antenna.script
+function generate_phantoms()
+	if phantom_idle == nil then
+		phantom_idle = math.random(2000, 5000)
+	end
+	if time_global() - phantom_time > phantom_idle then
+		phantom_time = time_global()
+		phantom_idle = math.random(5000, 10000)
+		if phantom_manager:phantom_count() < phantom_max then
+			local radius = phantom_spawn_radius * (math.random() / 2.0 + 0.5)
+			local ang = phantom_fov * math.random() - phantom_fov * 0.5
+			local dir = vector_rotate_y(db.actor:direction(), ang)
+			phantom_manager.spawn_phantom(db.actor:position():add(dir:mul(radius)))
+		end
+	end
+end
+-- \\
+
+
+local function play_head_animation(anim_name, id)
+    level.add_cam_effector(anim_name, id, false, "")
+end
+
+-- Сохраняем ссылку на звук до конца сцены/перезагрузки.
+local suicide_scene_sound = nil
+local function play_suicide_sound(sound)
+    local snd_obj = xr_sound.get_safe_sound_object(sound)
+    if snd_obj then
+        snd_obj:play_at_pos(db.actor, VECTOR_ZERO, 0, sound_object.s2d)
+    end
+    return snd_obj
+end
+
+local function start_suicide_scene(actor)
+    local started=time_global()
+    local hud_duration=math.floor(252*1000/30+0.5)
+    local death_delay=math.max(hud_duration+67,SUICIDE_ANIM_KICK_TIME+100+SUICIDE_ANIM_FALL_TIME)
+    local fall_delay=math.max(SUICIDE_ANIM_KICK_TIME+100,death_delay-SUICIDE_ANIM_FALL_TIME)
+    terminal_kind=2;terminal_until=started+death_delay
+    kick_at=started+SUICIDE_ANIM_KICK_TIME;fall_at=started+fall_delay
+    play_head_animation(SUICIDE_ANIM_DRAW,1900)
+    play_head_animation(SUICIDE_ANIM_SHAKE,1902)
+    play_head_animation(SUICIDE_ANIM_BREATH,1903)
+    suicide_scene_sound=play_suicide_sound(SUICIDE_SOUND_START)
+end
+
+function do_suicide(saved_prepare_left)
+    local actor = db.actor
+    if not actor or not actor:alive() or _is_suicided then return end
+    if shiza_vodka.is_death_started() then return end
+
+    -- Отменяем отложенные операции предметов, чтобы они не переключали слот сцены.
+    shiza_hud_items.cancel_for_scene()
+    _is_suicided = true
+    suicide_knife_visible = true
+    level.disable_input()
+    local open_wnd = level.main_input_receiver()
+    if open_wnd then level.start_stop_menu(open_wnd, true) end
+
+    local requested = time_global()
+    local wait_ms=type(saved_prepare_left)=="number" and math.max(1,math.min(5000,saved_prepare_left)) or 5000
+    local deadline = requested + wait_ms
+    terminal_kind=1;terminal_until=deadline
+    local created = false
+    local drop_requested_id = nil
+    local ready = false
+    local interrupted = false
+    printf("[SL_SUICIDE] prepare actor=%s", tostring(actor:id()))
+
+    add_session_call(
+        function()
+            if not same_actor(db.actor,actor) or not actor:alive() then
+                interrupted = true
+                return true
+            end
+            -- По таймауту не оставляем игрока навсегда с заблокированным вводом.
+            if time_global() >= deadline then return true end
+            actor:restore_weapon()
+
+            local slot_item = actor:item_in_slot(SLOT)
+            if slot_item and slot_item:section() ~= ANIM_SUICIDE_KNIFE then
+                -- Штатно освобождаем слот, без alife():release прикреплённого предмета.
+                if drop_requested_id ~= slot_item:id() then
+                    drop_requested_id = slot_item:id()
+                    printf("[SL_SUICIDE] drop_slot_item id=%s section=%s",
+                        tostring(slot_item:id()), slot_item:section())
+                    actor:drop_item(slot_item)
+                end
+                return false
+            end
+
+            local knife = actor:object(ANIM_SUICIDE_KNIFE)
+            if not knife then
+                if not created then
+                    created = true
+                    local server_obj = alife():create(ANIM_SUICIDE_KNIFE, actor:position(),
+                        actor:level_vertex_id(), actor:game_vertex_id(), actor:id())
+                    printf("[SL_SUICIDE] spawn_requested result=%s", tostring(server_obj ~= nil))
+                end
+                return false
+            end
+
+            local active = actor:active_item()
+            if actor:active_slot() == SLOT and active and active:section() == ANIM_SUICIDE_KNIFE then
+                ready = true
+                return true
+            end
+            actor:activate_slot(SLOT)
+            return false
+        end,
+        function()
+            if interrupted or not actor:alive() then
+                printf("[SL_SUICIDE] preparation_interrupted")
+                level.enable_input()
+                return
+            end
+            if not ready then
+                printf("[SL_SUICIDE] readiness_timeout elapsed_ms=%s; terminal_fallback=1",
+                    tostring(time_global() - requested))
+                -- Исход уже необратим: при неисправном HUD завершаем сцену смертью,
+                -- но не удаляем предметы и не выдаём таймаут за успешную анимацию.
+                actor:kill(actor)
+                level.enable_input()
+                return
+            end
+            printf("[SL_SUICIDE] ready wait_ms=%s", tostring(time_global() - requested))
+            start_suicide_scene(actor)
+        end)
+end
+
+
+-- Сцена смерти от передозировки антирада.
+-- Не меняет существующую сцену суицида от радиации.
+local function do_antirad_overdose_death()
+	if not db.actor or not db.actor:alive() or _is_suicided then
+		return
+	end
+
+	local actor = db.actor
+	local start_time = time_global()
+
+	-- Блокируем управление на время сцены.
+	suicide_knife_visible = false
+	_is_suicided = true
+	level.disable_input()
+
+	local open_wnd = level.main_input_receiver()
+	if open_wnd then
+		level.start_stop_menu(open_wnd, true)
+	end
+
+	-- Останавливаем только звук паники. Эффекты передозировки НЕ снимаем:
+	-- dead_zone2.ppe и alcohol.ppe должны оставаться активными во время смерти.
+	if panic_sound and panic_sound:playing() then
+		panic_sound:stop()
+	end
+	panic_sound = nil
+
+	-- Прячем оружие сразу, чтобы после четвёртого антирада не появился бинокль.
+	-- Руки остаются скрытыми на протяжении анимации смерти.
+	actor:hide_weapon()
+
+	-- Падение камеры и звук memory2 начинаются одновременно.
+    local camera_length = level.add_cam_effector(ANTIRAD_DEATH_ANIM, 6801, false, "")
+    local death_delay = ANTIRAD_DEATH_DELAY
+    if type(camera_length) == "number" and camera_length > 0 then
+        local length_ms = camera_length * 1000
+        death_delay = math.max(1, length_ms - math.min(600, length_ms * 0.25))
+    end
+
+	local snd_obj = xr_sound.get_safe_sound_object(ANTIRAD_DEATH_SOUND)
+    antirad_scene_sound=snd_obj
+	if snd_obj then
+		snd_obj:play_at_pos(actor, VECTOR_ZERO, 0, sound_object.s2d)
+	end
+
+    terminal_kind=3
+    terminal_until=start_time+death_delay
+
+end
+
+
+
+local function clear_antirad_state()
+    counter=0;antirad_reset_time=0;antirad_reset_scheduled=false
+    antirad_ppe_enabled=false
+    if panic_sound and panic_sound:playing() then panic_sound:stop() end
+    panic_sound=nil
+    level.remove_pp_effector(6768);level.remove_pp_effector(6671)
+    level.remove_cam_effector(6769)
+end
+local function update_item_timers()
+    if not _is_suicided and counter>0 and time_global()>=antirad_reset_time then clear_antirad_state() end
+end
+local function update_terminal()
+    local actor=db.actor
+    if not actor or not actor:alive() then return end
+    local now=time_global()
+    if terminal_kind==2 then
+        -- После загрузки клиентский нож может появиться на несколько кадров позже.
+        local knife=actor:item_in_slot(SLOT)
+        if knife and knife:section()==ANIM_SUICIDE_KNIFE then
+            suicide_knife_visible=true
+            if actor:active_slot()~=SLOT then actor:activate_slot(SLOT) end
+        end
+        if kick_at>=0 and now>=kick_at then kick_at=-1;play_head_animation(SUICIDE_ANIM_KICK,1901) end
+        if fall_at>=0 and now>=fall_at then fall_at=-1;play_head_animation(SUICIDE_ANIM_FALL,1904) end
+    end
+    if (terminal_kind==2 or terminal_kind==3) and now>=terminal_until then
+        actor:kill(actor);level.enable_input()
+    end
+end
+
+-- // Апдейт, вызываемый из bind_stalker.script
+function update(radiation, delta)
+    restore_pending()
+    update_item_timers()
+    update_terminal()
+    -- Отдельная пси-шкала больше не используется: убираем её старый дефицит.
+    -- В X-Ray запись в psy_health добавляет величину; движок ограничивает её максимумом.
+    local actor = db.actor
+    if actor and actor:alive() and actor.psy_health < 0.9999 then
+        actor.psy_health = 1.0
+    end
+    shiza_hud_items.update_weapon_policy()
+    update_meat_shiza()
+    radiation = math.min(1, radiation + meat_shiza)
+	-- Оригинальный код, хз, нужен ли статик
+	--[[
+	if radiation >= 0.7 then
+		local hud = get_hud()
+		local custom_static = hud:GetCustomStatic("cs_radiation_danger")
+		if custom_static == nil then
+			hud:AddCustomStatic("cs_radiation_danger", true)
+			hud:GetCustomStatic("cs_radiation_danger"):wnd():SetTextST("st_radiation_danger")
+		end
+	else
+		local hud = get_hud()
+		local custom_static = hud:GetCustomStatic("cs_radiation_danger")
+		if custom_static ~= nil then
+			hud:RemoveCustomStatic("cs_radiation_danger")
+		end
+	end
+	--]]
+	
+	--Так как от суицида не убежать, то пока проигрывается анимка + звуки нам нет смысла дальше обрабатывать радиацию
+	if _is_suicided or shiza_vodka.is_death_started() then
+		return
+	end
+	
+	--#+# На случай если надо будет отследить накопившийся таймер
+	-- if not HUD_STATIC then
+		-- local hud = get_hud()
+		-- local custom_static = hud:GetCustomStatic("cs_radiation_danger")
+		-- if not custom_static then
+			-- hud:AddCustomStatic("cs_radiation_danger", true)
+		-- end
+		-- HUD_STATIC = hud:GetCustomStatic("cs_radiation_danger"):wnd()
+	-- end
+	
+	--HUD_STATIC:SetTextST(tostring(_current_radiation_time))
+	if radiation <= RADIATION_MAX_LEVEL then
+		_current_radiation_time = 0
+	end
+	
+	if radiation >= RADIATION_MAX_LEVEL and _current_radiation_time < SUICIDE_TIMER then
+		_current_radiation_time = _current_radiation_time + delta
+	elseif radiation >= RADIATION_MAX_LEVEL and _current_radiation_time >= SUICIDE_TIMER and db.actor.health <= MIN_HEALTH_SUICIDE then
+		do_suicide()
+	end
+	
+	if radiation < 0.5 then
+		if radiation_ppe_enabled then
+			radiation_ppe_enabled = false
+			level.remove_pp_effector(6767)
+		end
+		return
+	end
+	
+	generate_phantoms()
+	
+	if radiation >= 0.8 and not radiation_ppe_enabled then
+		radiation_ppe_enabled = true
+		level.add_pp_effector(RADIATION_PPE_NAME, 6767, true)
+		level.set_pp_effector_factor(6767, 0.3)
+	end
+end
+--\\
+
+local random_sounds = {
+	"ambient\\random\\new_drone1",
+	"ambient\\random\\new_drone2",
+	"ambient\\random\\rnd_3dmbridge",
+	"ambient\\random\\rnd_ak47_1",
+	"ambient\\random\\rnd_ak47_2",
+	"ambient\\gunfire_1",
+	"ambient\\gunfire_2",
+	"ambient\\random\\rnd_crow",
+	"ambient\\random\\rnd_disgusting",
+	"ambient\\random\\rnd_distantmortar3",
+	"ambient\\random\\rnd_dog6",
+	"ambient\\random\\rnd_drone1",
+	"ambient\\random\\rnd_drone2",
+	"ambient\\random\\rnd_fallscream",
+	"ambient\\random\\rnd_horror3",
+	"ambient\\random\\rnd_horror4",
+	"ambient\\random\\rnd_m-16_3",
+	"ambient\\random\\rnd_m-16_4",
+	"ambient\\random\\rnd_m-249",
+	"ambient\\random\\rnd_moan",
+	"ambient\\random\\rnd_moan1",
+	"ambient\\random\\rnd_moan2",
+	"ambient\\random\\rnd_moan3",
+	"ambient\\random\\rnd_moan4",
+	"ambient\\random\\rnd_moan5",
+	"ambient\\random\\rnd_scr1",
+	"ambient\\random\\rnd_scr2",
+	"ambient\\random\\rnd_scr3",
+	"ambient\\random\\rnd_scr4",
+	"ambient\\random\\rnd_scr5",
+	"ambient\\random\\rnd_scr7",
+	"ambient\\random\\rnd_scr8",
+	"ambient\\random\\rnd_scr9",
+	"ambient\\random\\rnd_scr10",
+	"ambient\\random\\rnd_the_horror1",
+	"ambient\\random\\rnd_the_horror2",
+	"ambient\\random\\rnd_the_horror3",
+	"ambient\\random\\rnd_the_horror4",
+	"ambient\\random\\rnd_thunder",
+	"ambient\\random\\rnd_wolfhowl01",
+	"ambient\\random\\rnd_wolfhowl02",
+	"ambient\\random\\rt_coo1-m",
+	"ambient\\random\\rt_sickened1",
+	"ambient\\random\\rt_sickened2",
+	"ambient\\random\\rt_swamp_thing1"
+}
+
+function play_sound()
+	if not db.actor then
+		return
+	end
+
+	local snd_obj = xr_sound.get_safe_sound_object(random_sounds[math.random(#random_sounds)])
+	snd_obj:play_at_pos(db.actor, vector():set(0, 0, 0), 0, sound_object.s2d)
+end
+
+-- // Юз предмета, вызываемый из bind_stalker.script
+function on_actor_use(obj, section)
+    restore_pending()
+    update_item_timers()
+	if not db.actor or not db.actor:alive() then
+		return
+	end
+	
+	if not obj and not section then
+		return 
+	end
+	
+	if section and section ~= "antirad" then
+		return
+	end
+	
+
+	if obj and obj:section() ~= "antirad" then
+		return
+	end
+
+	if _is_suicided or shiza_vodka.is_death_started() then return end
+
+	counter = counter + 1
+
+	if counter >= 4 then
+		do_antirad_overdose_death()
+		return
+
+	elseif counter >= 3 then
+		if panic_sound and panic_sound:playing() then
+			panic_sound:stop()
+		end
+
+		panic_sound = xr_sound.get_safe_sound_object("affects\\panichka")
+
+		if panic_sound then
+			panic_sound:play_at_pos(db.actor, vector():set(0, 0, 0), 0, sound_object.s2d)
+		end
+
+		play_sound()
+
+		if not antirad_ppe_enabled then
+			antirad_ppe_enabled = true
+			level.add_pp_effector("dead_zone2.ppe", 6768, true)
+			level.set_pp_effector_factor(6768, 0.85)
+			level.add_pp_effector("alcohol.ppe", 6671, true)
+			level.set_pp_effector_factor(6671, 0.4)
+			level.add_cam_effector("camera_effects\\scope_shake.anm", 6769, false, "")
+		end
+	end
+
+    -- Каждая завершённая доза продлевает прежний общий срок сброса.
+    antirad_reset_time=time_global()+ANTIRAD_USE_TIMER
+
+end
+
+function is_death_started() return _is_suicided end
+
+function reset()
+    terminal_kind,terminal_until,kick_at,fall_at=0,0,-1,-1
+    pending_state=nil
+    if antirad_scene_sound and antirad_scene_sound:playing() then antirad_scene_sound:stop() end
+    antirad_scene_sound=nil
+    session_generation = session_generation + 1
+    if _is_suicided then level.enable_input() end
+    _is_suicided = false
+    suicide_knife_visible = false
+    _current_radiation_time = 0
+    counter = 0
+    antirad_reset_time = 0
+    antirad_reset_scheduled = false
+    meat_shiza = 0
+    meat_decay_after = 0
+    meat_last_update = nil
+    radiation_ppe_enabled = false
+    antirad_ppe_enabled = false
+    phantom_idle = nil
+    phantom_time = 0
+    if panic_sound and panic_sound:playing() then panic_sound:stop() end
+    panic_sound = nil
+    if suicide_scene_sound and suicide_scene_sound:playing() then suicide_scene_sound:stop() end
+    suicide_scene_sound = nil
+    for _, id in ipairs({6767, 6768, 6671}) do level.remove_pp_effector(id) end
+    for _, id in ipairs({6769, 6801, 1900, 1901, 1902, 1903, 1904}) do level.remove_cam_effector(id) end
+end
+
+function should_hide_weapon() return _is_suicided and not suicide_knife_visible end
+
+
+function save_state(actor)
+    if pending_state then
+        shiza_state.write(actor,"radiation",pending_state)
+        return
+    end
+    update_meat_shiza()
+    local now=time_global()
+    shiza_state.write(actor,"radiation",{count=counter,
+        reset=shiza_state.left(antirad_reset_time,now),meat=meat_shiza,
+        meat_delay=shiza_state.left(meat_decay_after,now),danger=_current_radiation_time,
+        terminal=terminal_kind,finish=shiza_state.left(terminal_until,now),
+        kick=kick_at>=0 and shiza_state.left(kick_at,now) or -1,
+        fall=fall_at>=0 and shiza_state.left(fall_at,now) or -1})
+end
+function queue_load_state(actor)
+    pending_state=shiza_state.read(actor,"radiation")
+end
+function restore_pending()
+    if not pending_state or not db.actor or not db.actor:alive() then return end
+    local saved=pending_state
+    reset()
+    local now=time_global()
+    counter=math.floor(shiza_state.number(saved,"count",0,0,4))
+    local left=shiza_state.number(saved,"reset",0,0,ANTIRAD_USE_TIMER)
+    antirad_reset_time=now+left
+    meat_shiza=shiza_state.number(saved,"meat",0,0,1)
+    meat_decay_after=now+shiza_state.number(saved,"meat_delay",0,0,MEAT_SHIZA_DECAY_DELAY)
+    meat_last_update=now
+    _current_radiation_time=shiza_state.number(saved,"danger",0,0,SUICIDE_TIMER)
+    local kind=math.floor(shiza_state.number(saved,"terminal",0,0,3))
+    local finish=shiza_state.number(saved,"finish",0,0,60000)
+    if kind==0 and left<=0 then counter=0 end
+    if counter>=3 then
+        antirad_ppe_enabled=true
+        level.add_pp_effector("dead_zone2.ppe",6768,true);level.set_pp_effector_factor(6768,0.85)
+        level.add_pp_effector("alcohol.ppe",6671,true);level.set_pp_effector_factor(6671,0.4)
+        if kind==0 then
+            panic_sound=xr_sound.get_safe_sound_object("affects\\panichka")
+            if panic_sound then panic_sound:play_at_pos(db.actor,VECTOR_ZERO,0,sound_object.s2d) end
+        end
+    end
+    if kind==1 then
+        do_suicide(finish)
+    elseif kind==2 or kind==3 then
+        _is_suicided=true;terminal_kind=kind;terminal_until=now+finish
+        level.disable_input()
+        suicide_knife_visible=kind==2 and db.actor:object(ANIM_SUICIDE_KNIFE)~=nil
+        if suicide_knife_visible then db.actor:restore_weapon() else db.actor:hide_weapon() end
+        local kr=shiza_state.number(saved,"kick",-1,-1,60000)
+        local fr=shiza_state.number(saved,"fall",-1,-1,60000)
+        kick_at=kr>=0 and now+kr or -1
+        fall_at=fr>=0 and now+fr or -1
+        -- Уже прошедшие анимации не повторяются и срок смерти не продлевается.
+    end
+end

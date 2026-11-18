@@ -1,0 +1,81 @@
+-- Контроллёр воздействует на существующую радиацию — шкалу шизы.
+-- Общий биндер монстров не заменяется: наследуем его штатное поведение.
+-- Это слабая скриптовая аура, а не перехват нативного момента атаки.
+
+local SHIZA_RADIUS = 20.0 -- Радиус воздействия в метрах.
+local SHIZA_MAX_POWER = 0.016 -- Максимальная прямая прибавка шизы за тик.
+local SHIZA_DEBUG = true -- Временно пишем диагностику в xray_user.log.
+local SHIZA_TICK_MS = 1000 -- Интервал без накопления пропущенных тиков.
+
+-- Диагностика не чаще раза в пять секунд на одного контроллёра.
+local function report(self, state, actor, distance, amount)
+    if not SHIZA_DEBUG then return end
+    local now = time_global()
+    if self.shiza_log_time and now < self.shiza_log_time then return end
+    self.shiza_log_time = now + 5000
+    local current = -1
+    if actor then current = actor.radiation end
+    printf("[SL_CTRL_SHIZA] id=%s state=%s dist=%.2f rad_now=%.6f add=%.6f",
+        tostring(self.object:id()), state, distance or -1, current, amount or 0)
+end
+
+printf("[SL_CTRL_SHIZA] module_loaded version=3")
+
+function bind(obj)
+    local new_binder = controller_shiza_binder(obj)
+    obj:bind_object(new_binder)
+    if SHIZA_DEBUG then
+        printf("[SL_CTRL_SHIZA] bound id=%s section=%s", tostring(obj:id()), obj:section())
+    end
+end
+
+class "controller_shiza_binder" (bind_monster.generic_object_binder)
+
+function controller_shiza_binder:__init(obj) super(obj)
+    self.shiza_next_tick = time_global() + SHIZA_TICK_MS
+end
+
+function controller_shiza_binder:update(delta)
+    bind_monster.generic_object_binder.update(self, delta)
+
+    local now = time_global()
+    if now < self.shiza_next_tick then return end
+    self.shiza_next_tick = now + SHIZA_TICK_MS
+
+    local actor = db.actor
+    local monster = self.object
+    if not actor or not actor:alive() or not monster:alive() then
+        report(self, "inactive", actor)
+        return
+    end
+
+    -- Воздействие только в бою с ГГ: не через стены и не на другого противника.
+    local enemy = monster:best_enemy()
+    if not enemy or enemy:id() ~= actor:id() then
+        report(self, "actor_not_enemy", actor)
+        return
+    end
+    if not monster:see(actor) then
+        report(self, "not_visible", actor)
+        return
+    end
+
+    local distance = monster:position():distance_to(actor:position())
+    if distance >= SHIZA_RADIUS then
+        report(self, "out_of_range", actor, distance)
+        return
+    end
+
+    -- Вдали слабее; у границы радиуса сила плавно стремится к нулю.
+    local power = SHIZA_MAX_POWER * (1.0 - math.max(0, distance) / SHIZA_RADIUS)
+    if power <= 0 then return end
+
+    -- В X-Ray запись в actor.radiation ДОБАВЛЯЕТ величину, а не задаёт итог.
+    -- Меняем реальный показатель, который отображается в инвентаре.
+    -- Здесь давление на психику не проходит через радиационную защиту костюма.
+    local amount = math.min(power, math.max(0, 1.0 - actor.radiation))
+    if amount > 0 then
+        actor.radiation = amount
+    end
+    report(self, "applied", actor, distance, amount)
+end

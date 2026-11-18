@@ -1,0 +1,283 @@
+-- Открытые локации из актуального game_maps_single.ltx пользователя.
+-- Исключённые карты не управляются и сохраняют штатную музыку.
+local DAY={
+ ["l01_escape"]={
+  {path="manifest\\kordon",volume=0.22,pause_min=0.0,pause_max=0.0,from=0.0,to=0.0},
+ },
+ ["l02_garbage"]={
+  {path="manifest\\svalka",volume=0.22,pause_min=0.0,pause_max=0.0,from=0.0,to=0.0},
+ },
+ ["l03_agroprom"]={
+  {path="music\\amb07",volume=1.0,pause_min=10.0,pause_max=30.0,from=21.0,to=24.0},
+  {path="music\\amb09",volume=0.5,pause_min=10.0,pause_max=30.0,from=0.0,to=0.0},
+  {path="music\\06_zone_triggers",volume=0.5,pause_min=10.0,pause_max=30.0,from=0.0,to=0.0},
+ },
+ ["l04_darkvalley"]={
+  {path="music\\04_cold_freezing_out",volume=0.5,pause_min=10.0,pause_max=30.0,from=0.0,to=10.0},
+  {path="music\\amb07",volume=1.0,pause_min=10.0,pause_max=30.0,from=21.0,to=24.0},
+  {path="music\\amb09",volume=0.5,pause_min=10.0,pause_max=30.0,from=0.0,to=0.0},
+ },
+ ["l05_bar"]={
+  {path="manifest\\bar",volume=0.22,pause_min=0.0,pause_max=0.0,from=0.0,to=0.0},
+  {path="manifest\\manifest_ambient",volume=0.16,pause_min=0.0,pause_max=0.0,from=0.0,to=0.0},
+ },
+ ["l06_rostok"]={
+  {path="music\\04_cold_freezing_out",volume=0.5,pause_min=10.0,pause_max=30.0,from=0.0,to=0.0},
+  {path="music\\07_mutation",volume=0.5,pause_min=10.0,pause_max=30.0,from=0.0,to=0.0},
+  {path="music\\amb03",volume=0.5,pause_min=10.0,pause_max=30.0,from=0.0,to=0.0},
+ },
+ ["l07_military"]={
+  {path="manifest\\arm_skladi",volume=0.22,pause_min=0.0,pause_max=0.0,from=0.0,to=0.0},
+  {path="manifest\\manifest_ambient",volume=0.16,pause_min=0.0,pause_max=0.0,from=0.0,to=0.0},
+  {path="manifest\\narastanie_manifest",volume=0.14,pause_min=0.0,pause_max=0.0,from=0.0,to=0.0},
+  {path="manifest\\ubivanie_manifest",volume=0.14,pause_min=0.0,pause_max=0.0,from=0.0,to=0.0},
+ },
+ ["l08_yantar"]={
+  {path="music\\amb22",volume=0.2,pause_min=20.0,pause_max=40.0,from=6.0,to=22.0},
+  {path="music\\amb17",volume=0.2,pause_min=20.0,pause_max=40.0,from=22.0,to=6.0},
+ },
+ ["l10_radar"]={
+  {path="manifest\\radar",volume=0.22,pause_min=0.0,pause_max=0.0,from=0.0,to=0.0},
+  {path="manifest\\manifest_ambient",volume=0.16,pause_min=0.0,pause_max=0.0,from=0.0,to=0.0},
+  {path="manifest\\narastanie_manifest",volume=0.14,pause_min=0.0,pause_max=0.0,from=0.0,to=0.0},
+  {path="manifest\\ubivanie_manifest",volume=0.14,pause_min=0.0,pause_max=0.0,from=0.0,to=0.0},
+ },
+ ["l11_pripyat"]={
+  {path="music\\amb07",volume=0.2,pause_min=20.0,pause_max=40.0,from=6.0,to=22.0},
+  {path="music\\amb17",volume=0.2,pause_min=20.0,pause_max=40.0,from=22.0,to=6.0},
+ },
+ ["l09_deadcity"]={
+  {path="music\\amb01",volume=0.5,pause_min=10.0,pause_max=20.0,from=0.0,to=12.0},
+  {path="music\\amb03",volume=0.5,pause_min=10.0,pause_max=15.0,from=0.0,to=12.0},
+  {path="music\\amb07",volume=1.0,pause_min=5.0,pause_max=25.0,from=12.0,to=24.0},
+ },
+ ["l23_final_battle"]={
+  {path="music\\amb01",volume=0.5,pause_min=10.0,pause_max=20.0,from=0.0,to=12.0},
+  {path="music\\amb03",volume=0.5,pause_min=10.0,pause_max=15.0,from=0.0,to=12.0},
+  {path="music\\amb07",volume=1.0,pause_min=5.0,pause_max=25.0,from=12.0,to=24.0},
+ },
+}
+local FILL_LOCATIONS={l01_escape=true,l05_bar=true}
+-- Музыкальная очередь: один трек за раз, два синхронных моно-канала.
+-- Ночь — игровые часы; фейды и паузы — реальные миллисекунды time_global.
+local FADE=5000
+local KEY="sl_music_queue_v1_"
+local NIGHT={
+ {path="manifest\\sl_night_manifest_1",volume=0.22,length=620356},
+ {path="manifest\\sl_night_manifest_2",volume=0.22,length=453878}
+}
+local FILLER={
+ {path="manifest\\sl_pustota_1",volume=0.16,length=832801},
+ {path="manifest\\sl_pustota_2",volume=0.16,length=554710}
+}
+local progress={}
+local night_next=1
+local location, mode, pair, gap_until=nil,nil,nil,0
+local pending=nil
+local reported={}
+local function warn(key,text)
+    if reported[key] then return end
+    reported[key]=true
+    printf("[SL_MUSIC] %s",text)
+end
+local function clamp(v,lo,hi)
+    v=tonumber(v)
+    if not v or v~=v or v==math.huge or v==-math.huge then return lo end
+    return math.max(lo,math.min(hi,v))
+end
+local function state_for(name)
+    if not progress[name] then progress[name]={index=1,phase=0,filler=1} end
+    return progress[name]
+end
+local function stop_pair()
+    if pair then
+        pair.left:stop();pair.right:stop()
+        pair=nil
+    end
+end
+function reset()
+    stop_pair()
+    progress={};night_next=1
+    location,mode,gap_until=nil,nil,0
+    pending=nil
+end
+local function music_volume()
+    local ok,value=pcall(function() return get_console():get_float("snd_volume_music") end)
+    if ok and type(value)=="number" then return clamp(value,0,1) end
+    return 1
+end
+local function gain(value)
+    if pair then
+        local v=pair.track.volume*value*music_volume()
+        pair.left.volume=v;pair.right.volume=v
+        pair.gain=value
+    end
+end
+local function eligible(t,hour)
+    local a,b=t.from or 0,t.to or 0
+    if a==b then return true end
+    if a<b then return hour>=a and hour<b end
+    return hour>=a or hour<b
+end
+local function wanted()
+    local name=string.lower(level.name())
+    if not DAY[name] then return name,nil end
+    local hour=level.get_time_hours()
+    if hour>=23 or hour<4 then return name,"night" end
+    return name,"day"
+end
+local function complete()
+    if not pair then return end
+    local role,track=pair.role,pair.track
+    stop_pair()
+    if role=="night" then
+        night_next=3-night_next
+        gap_until=time_global()+math.random(30000,60000)
+    elseif role=="filler" then
+        local st=state_for(location)
+        st.filler=3-st.filler;st.phase=0
+    else
+        local st=state_for(location)
+        st.index=st.index%math.max(1,#DAY[location])+1
+        if FILL_LOCATIONS[location] then
+            st.phase=1
+        else
+            local lo,hi=track.pause_min or 0,track.pause_max or 0
+            gap_until=time_global()+math.random(lo*1000,hi*1000)
+        end
+    end
+end
+local function choose()
+    if mode=="night" then return NIGHT[night_next],"night" end
+    local st=state_for(location)
+    if FILL_LOCATIONS[location] and st.phase==1 then return FILLER[st.filler],"filler" end
+    local entries=DAY[location]
+    local hour=level.get_time_hours()
+    for offset=0,#entries-1 do
+        local index=(st.index+offset-1)%#entries+1
+        if eligible(entries[index],hour) then
+            st.index=index
+            return entries[index],"main"
+        end
+    end
+    return nil
+end
+local function start(track,role,now)
+    -- Проверяем ресурсы до конструктора: отсутствующий звук может вызвать
+    -- ошибку внутри движка, а не обычное исключение Lua.
+    local checked,exists=pcall(function()
+        local fs=getFS()
+        return fs:exist("$game_sounds$",track.path.."_l.ogg") and
+               fs:exist("$game_sounds$",track.path.."_r.ogg")
+    end)
+    if checked and not exists then
+        warn(track.path,"Нет полной пары: "..track.path)
+        gap_until=now+30000
+        return
+    end
+    local ok,l,r=pcall(function()
+        return xr_sound.get_safe_sound_object(track.path.."_l"),
+               xr_sound.get_safe_sound_object(track.path.."_r")
+    end)
+    if not ok or not l or not r then
+        warn(track.path,"Не удалось открыть пару "..track.path..": "..tostring(l))
+        gap_until=now+30000
+        return
+    end
+    local duration=track.length
+    if not duration then
+        -- В ТЧ length() задаётся в миллисекундах. При отсутствии метода
+        -- завершаем по playing(), не угадывая длительность старого трека.
+        local has_length,value=pcall(function() return l:length() end)
+        if has_length and type(value)=="number" and value>0 then duration=value end
+    end
+    pair={left=l,right=r,track=track,role=role,started=now,
+        duration=duration,gain=0,transition=nil}
+    l.volume=0;r.volume=0
+    local played,err=pcall(function()
+        l:play_at_pos(db.actor,vector():set(-1,0,1),0,sound_object.s2d)
+        r:play_at_pos(db.actor,vector():set(1,0,1),0,sound_object.s2d)
+        gain(0)
+    end)
+    if not played then
+        stop_pair();gap_until=now+30000
+        warn(track.path.."_play", "Ошибка воспроизведения "..track.path..": "..tostring(err))
+    end
+end
+function update()
+    if not db.actor or not db.actor:alive() then stop_pair();return end
+    local now=time_global()
+    local target,target_mode=wanted()
+    local restored_gap=nil
+    if pending then
+        night_next=pending.night
+        progress=pending.progress
+        if pending.location==target and pending.mode==target_mode then
+            restored_gap=now+pending.gap
+        end
+        pending=nil
+    end
+    if location~=target then
+        stop_pair();location=target;mode=target_mode
+        -- При смене карты старую паузу не переносим на новую.
+        gap_until=restored_gap or 0
+    end
+    if restored_gap and location==target and mode==target_mode then gap_until=restored_gap end
+    if mode==target_mode and pair then pair.transition=nil end
+    if mode~=target_mode then
+        if pair and not pair.transition then
+            pair.transition=now;pair.transition_gain=pair.gain
+        end
+        if pair then
+            local f=math.max(0,1-(now-pair.transition)/FADE)
+            gain(pair.transition_gain*f)
+            if f>0 then return end
+            stop_pair()
+        end
+        mode=target_mode;gap_until=0
+    end
+    if not mode then return end
+    if pair then
+        local age=now-pair.started
+        local live=pair.left:playing() or pair.right:playing()
+        if (not live and age>=1000) or (pair.duration and age>=pair.duration) then
+            complete()
+        else
+            local f=math.min(1,math.max(0,age/FADE))
+            if pair.duration then f=math.min(f,math.max(0,(pair.duration-age)/FADE)) end
+            gain(f)
+            return
+        end
+    end
+    if now<gap_until then return end
+    local track,role=choose()
+    if track then start(track,role,now) end
+end
+function save_state(actor)
+    local snapshot=pending
+    local function put(k,v) xr_logic.pstor_store(actor,KEY..k,v) end
+    put("night",snapshot and snapshot.night or night_next)
+    put("location",snapshot and snapshot.location or location or "")
+    put("mode",snapshot and snapshot.mode or mode or "")
+    put("gap",snapshot and snapshot.gap or math.max(0,gap_until-time_global()))
+    local states=snapshot and snapshot.progress or progress
+    for name in pairs(DAY) do
+        local st=states[name] or {index=1,phase=0,filler=1}
+        put(name.."_index",st.index);put(name.."_phase",st.phase);put(name.."_filler",st.filler)
+    end
+end
+function queue_load_state(actor)
+    reset()
+    local function get(k,default) return xr_logic.pstor_retrieve(actor,KEY..k,default) end
+    local states={}
+    for name,entries in pairs(DAY) do
+        states[name]={index=math.floor(clamp(get(name.."_index",1),1,math.max(1,#entries))),
+            phase=math.floor(clamp(get(name.."_phase",0),0,1)),
+            filler=math.floor(clamp(get(name.."_filler",1),1,2))}
+    end
+    local saved_mode=get("mode","")
+    if saved_mode~="day" and saved_mode~="night" then saved_mode=nil end
+    pending={night=math.floor(clamp(get("night",1),1,2)),
+        progress=states,
+        location=get("location",""),mode=saved_mode,gap=clamp(get("gap",0),0,60000)}
+end

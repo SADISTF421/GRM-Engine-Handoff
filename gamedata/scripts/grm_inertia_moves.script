@@ -1,0 +1,59 @@
+-- Дополнительные движения камеры; стрельба и параметры оружия не меняются.
+local ID = 52851
+local last_state = nil
+local landing_variant = false
+local names = {
+    jump = "grm_inertia\\jump_crp.anm",
+    landing1 = "grm_inertia\\landing_crp1.anm",
+    landing2 = "grm_inertia\\landing_crp2.anm",
+    left = "grm_inertia\\lean_left_crp.anm",
+    right = "grm_inertia\\lean_right_crp.anm",
+    sprint = "grm_inertia\\sprint_start_soft.anm",
+}
+local function hasbit(value, mask)
+    return math.floor(value / mask) % 2 == 1
+end
+local function play(name)
+    level.add_cam_effector(names[name], ID, false, "")
+end
+function reset()
+    last_state = nil
+    landing_variant = false
+    pcall(function() level.remove_cam_effector(ID) end)
+end
+local function blocked(actor)
+    if not actor or not actor:alive() or actor:is_talking() or actor.health <= 0.20 then return true end
+    if device().precache_frame > 0 or actor:has_info("disabled_ui") then return true end
+    if shiza_hud_items and shiza_hud_items.is_using_item and shiza_hud_items.is_using_item() then return true end
+    if shiza_kill_stress and shiza_kill_stress.is_active and shiza_kill_stress.is_active() then return true end
+    if shiza_radiation and shiza_radiation.is_death_started and shiza_radiation.is_death_started() then return true end
+    if shiza_vodka and shiza_vodka.is_death_started and shiza_vodka.is_death_started() then return true end
+    return false
+end
+function update(actor)
+    if blocked(actor) then last_state = nil; return end
+    local state = level.actor_moving_state()
+    if type(state) ~= "number" or state < 0 then last_state = nil; return end
+    if not last_state then last_state = state; return end
+    local old = last_state
+    last_state = state
+    -- Приземление важнее прыжка и наклона, если события пришли в один кадр.
+    local landed = hasbit(state,512) or hasbit(state,1024)
+    local was_landed = hasbit(old,512) or hasbit(old,1024)
+    if landed and not was_landed then
+        landing_variant = not landing_variant
+        play(landing_variant and "landing1" or "landing2")
+    elseif hasbit(state,128) and not hasbit(old,128) then
+        play("jump")
+    elseif hasbit(state,8192) ~= hasbit(old,8192) then
+        play("left")
+    elseif hasbit(state,16384) ~= hasbit(old,16384) then
+        play("right")
+    elseif hasbit(state,4096) and state % 16 ~= 0
+        and not (hasbit(old,4096) and old % 16 ~= 0)
+        and not (hasbit(state,128) or hasbit(state,256) or landed
+                 or hasbit(old,128) or hasbit(old,256) or was_landed) then
+        -- Один мягкий импульс при начале бега, без повторов на каждом шаге.
+        play("sprint")
+    end
+end

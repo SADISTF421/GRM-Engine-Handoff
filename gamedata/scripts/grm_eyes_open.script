@@ -1,0 +1,157 @@
+-- GRM experimental load fade. No save data or engine callbacks are changed.
+local overlay = nil
+local holder = nil
+local attached = false
+local pending = false
+local began = nil
+local last_time = nil
+local frame_index = -1
+
+local OPEN_MS = 480
+local BLINK_MS = 170
+local TOTAL_MS = 1350
+local STEPS = 64
+local CAMERA_ID = 52987
+local CAMERA_FILE = "grm_eyes_open\\wake_sway.anm"
+local camera_active = false
+
+local function stop_camera()
+    if camera_active then
+        pcall(function() level.remove_cam_effector(CAMERA_ID) end)
+        camera_active = false
+    end
+end
+
+local function camera_allowed(actor)
+    local ok, blocked = pcall(function()
+        if not actor or not actor:alive() or actor:is_talking() then return true end
+        if actor:has_info("disabled_ui") then return true end
+        if type(actor.health) == "number" and actor.health <= 0.20 then return true end
+        if shiza_hud_items and shiza_hud_items.is_using_item and shiza_hud_items.is_using_item() then return true end
+        if shiza_kill_stress and shiza_kill_stress.is_active and shiza_kill_stress.is_active() then return true end
+        if shiza_radiation and shiza_radiation.is_death_started and shiza_radiation.is_death_started() then return true end
+        if shiza_vodka and shiza_vodka.is_death_started and shiza_vodka.is_death_started() then return true end
+        return false
+    end)
+    return ok and not blocked
+end
+
+local function start_camera(actor)
+    if not camera_allowed(actor) then return end
+    local ok, err = pcall(function() level.add_cam_effector(CAMERA_FILE, CAMERA_ID, false, "") end)
+    if ok then
+        camera_active = true
+    else
+        pcall(function() printf("[GRM_EYES_OPEN] camera unavailable: %s", tostring(err)) end)
+    end
+end
+
+local function smooth(t)
+    t = math.max(0, math.min(1, t))
+    return t * t * (3 - 2 * t)
+end
+
+local function clear_overlay()
+    if not overlay then return true end
+    -- Hide first, even if removal raises an error.
+    pcall(function() overlay:Show(false) end)
+    if attached then
+        local ok = pcall(function() holder:RemoveDialogToRender(overlay) end)
+        if not ok then return false end
+    end
+    overlay = nil
+    holder = nil
+    attached = false
+    return true
+end
+
+function reset()
+    stop_camera()
+    pending = false
+    began = nil
+    last_time = nil
+    frame_index = -1
+    clear_overlay()
+end
+
+-- Reinitialization may occur before or after binder:load; keep a queued load.
+function reinit()
+    stop_camera()
+    clear_overlay()
+    began = nil
+    last_time = nil
+    frame_index = -1
+end
+
+function queue_load()
+    reset()
+    if not overlay then pending = true end
+end
+
+local function texture_name(i)
+    return string.format("ui\\grm_eyes_open\\fade_%02d", i)
+end
+
+local function create_overlay()
+    if not clear_overlay() then error("previous overlay could not be removed") end
+    local wnd = CUIStatic()
+    wnd:SetWndRect(Frect():set(0, 0, 1024, 768))
+    wnd:SetStretchTexture(true)
+    wnd:InitTexture(texture_name(0))
+    wnd:Show(true)
+    local hud = get_hud()
+    if not hud then error("HUD unavailable") end
+    overlay = wnd
+    holder = hud
+    hud:AddDialogToRender(wnd)
+    attached = true
+    frame_index = 0
+end
+
+local function tick(actor)
+    if not pending then return end
+    if not actor or not actor:alive() then reset(); return end
+    local now = time_global()
+    if last_time and now < last_time then reset(); return end
+    last_time = now
+    if not app_ready() or device().precache_frame > 0 then
+        -- Do not let an overlay remain over a loading screen or menu.
+        if overlay then
+            stop_camera()
+            clear_overlay()
+            began = nil
+            frame_index = -1
+        end
+        return
+    end
+    if not overlay then
+        create_overlay()
+        began = now
+        start_camera(actor)
+        return
+    end
+    if camera_active and not camera_allowed(actor) then stop_camera() end
+    local elapsed = math.max(0, now - began)
+    if elapsed >= TOTAL_MS then reset(); return end
+    local visible
+    if elapsed < OPEN_MS then
+        visible = 0.70 * smooth(elapsed / OPEN_MS)
+    elseif elapsed < OPEN_MS + BLINK_MS then
+        visible = 0.70 * (1 - smooth((elapsed - OPEN_MS) / BLINK_MS))
+    else
+        visible = smooth((elapsed - OPEN_MS - BLINK_MS) / (TOTAL_MS - OPEN_MS - BLINK_MS))
+    end
+    local next_index = math.floor(visible * STEPS + 0.5)
+    if next_index ~= frame_index then
+        overlay:InitTexture(texture_name(next_index))
+        frame_index = next_index
+    end
+end
+
+function update(actor)
+    local ok, err = pcall(tick, actor)
+    if not ok then
+        reset()
+        pcall(function() printf("[GRM_EYES_OPEN] disabled: %s", tostring(err)) end)
+    end
+end

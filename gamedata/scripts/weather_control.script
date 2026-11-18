@@ -1,0 +1,110 @@
+------------------------------------------------------------------------------------------------
+function set_comm(command)
+	get_console():execute(command)
+end
+
+function weather_commands()
+		set_comm("r2_ls_bloom_threshold 0.0001")
+		set_comm("r2_ls_bloom_kernel_scale 0.7")
+		set_comm("r2_tonemap_middlegray 0.5")
+		set_comm("r2_sun_lumscale 0.9")
+		set_comm("r2_sun_lumscale_amb 0.5")
+		set_comm("r2_sun_lumscale_hemi 0.7")
+		set_comm("r2_sun_near_border 1.0")
+end
+------------------------------------------------------------------------------------------------
+--XMODER PART BIG THX
+local time_stop = 0
+local time_up = 1000
+
+function time_factor_up()
+	t = level.get_time_factor()
+	t = t + time_up
+	level.set_time_factor(t)
+	xr_logic.pstor_store(db.actor, "t", t)
+	news_manager.send_tip(db.actor, "%c[25,240,25,25]Timefactor up to ["..t.."]", nil, nil, 20)
+end
+
+function time_factor_return()
+	t = system_ini():r_float("alife","time_factor")
+	level.set_time_factor(t)
+	xr_logic.pstor_store(db.actor, "t", 0)
+	news_manager.send_tip(db.actor, "%c[0,0,255,25]Timefactor returned to ["..t.."]", nil, nil, 20)
+end
+
+function time_factor_stop()
+	level.set_time_factor(time_stop)
+	xr_logic.pstor_store(db.actor, "t", time_stop)
+	news_manager.send_tip(db.actor, "%c[255,240,155,25]Timefactor stop to ["..time_stop.."]", nil, nil, 20)
+end
+------------------------------------------------------------------------------------------------
+function change_cycle(cycle)
+	level.set_weather(cycle,true)
+	news_manager.send_tip(db.actor, "%c[0,255,255,255]Set weather : ["..tostring(level.get_weather()).."]", nil, nil, 20)
+end
+------------------------------------------------------------------------------------------------
+--CHARSI AND RAYTWITTY PART BIG THX
+local con = nil
+local con_command = "mm_net_player_name"
+local def_value = "_"
+
+function update()
+	if not con then
+		con = get_console()
+		con:execute( con_command .." ".. def_value )
+		
+		for k,v in pairs(_G[script_name()]) do
+			if type(v)=='function' and DIK_keys[string.upper(k)] then
+				local key = "k"..string.gsub(k,"dik_","")
+				con:execute("bind_console "..con_command.." "..k.." "..key)
+			end
+		end
+	else
+		local str = con:get_string(con_command)  
+		if str~=def_value and this [str]then
+			this[str]()
+			con:execute(con_command.." "..def_value)
+		end
+	end
+end
+------------------------------------------------------------------------------------------------
+function dik_numpad0()
+	change_cycle("f42_cordon_fog")
+end
+
+function dik_numpad4()
+	change_cycle("f42_north")
+end
+
+function dik_numpad5()
+	change_cycle("f42_melancholy")
+end
+
+function dik_numpad6()
+	change_cycle("f42_rain")
+end
+
+function dik_numpad7()
+	change_cycle("f42_melancholy")
+end
+
+function dik_numpad8()
+	change_cycle("f42_melancholy")
+end
+
+function dik_numpad9()
+	change_cycle("f42_melancholy")
+end
+
+function dik_numpad1()
+	time_factor_up()
+end
+
+function dik_numpad2()
+	time_factor_return()
+end
+
+function dik_numpad3()
+	time_factor_stop()
+end
+------------------------------------------------------------------------------------------------

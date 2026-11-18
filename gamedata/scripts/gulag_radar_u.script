@@ -1,0 +1,967 @@
+local t = {}
+local gulags = {}
+
+function load_job(sj, gname, type, squad, groups)
+
+      if type == "bun_kordon1" then
+		t = { section = "logic@bun_kordon1_camper1",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+       table.insert(sj, t)	
+       t = { section = "logic@bun_kordon1_camper2",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+	   t = { section = "logic@bun_kordon1_camper3",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		 t = { section = "logic@bun_kordon1_camper4",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_kordon1_camper5",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_kordon1_camper11",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+       table.insert(sj, t)	
+       t = { section = "logic@bun_kordon1_camper21",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+	   t = { section = "logic@bun_kordon1_camper31",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		 t = { section = "logic@bun_kordon1_camper41",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_kordon1_camper51",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+       end
+       
+       if type == "bun_kordon2" then
+		t = { section = "logic@bun_kordon2_camper1",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+       table.insert(sj, t)	
+       t = { section = "logic@bun_kordon2_camper2",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+	   t = { section = "logic@bun_kordon2_camper3",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		 t = { section = "logic@bun_kordon2_camper4",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_kordon2_camper11",
+			idle = 0,
+			prior = 1, state = {1}, 
+			in_rest = "", out_rest = ""
+		}
+       table.insert(sj, t)	
+       t = { section = "logic@bun_kordon2_camper21",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+	   t = { section = "logic@bun_kordon2_camper31",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		 t = { section = "logic@bun_kordon2_camper41",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		end
+		
+		 if type == "bun_kordon3" then
+		t = { section = "logic@bun_kordon3_walker1",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+       table.insert(sj, t)	
+       t = { section = "logic@bun_kordon3_walker2",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+			t = { section = "logic@bun_kordon3_walker11",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+       table.insert(sj, t)	
+       t = { section = "logic@bun_kordon3_walker21",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		end
+		
+		
+		if type == "bun_ptr1" then
+		t = { section = "logic@bun_ptr1_patrol1",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+
+       t = { section = "logic@bun_ptr1_patrol2",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr1_patrol3",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr1_patrol4",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr1_patrol11",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+
+       t = { section = "logic@bun_ptr1_patrol21",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr1_patrol31",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr1_patrol41",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+       end
+       
+       
+       if type == "bun_ptr2" then
+		t = { section = "logic@bun_ptr2_patrol1",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+
+       t = { section = "logic@bun_ptr2_patrol2",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr2_patrol3",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr2_patrol4",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr2_sniper1",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr2_patrol11",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+
+       t = { section = "logic@bun_ptr2_patrol21",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr2_patrol31",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr2_patrol41",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr2_sniper11",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+       end
+       
+       
+       if type == "bun_ptr3" then
+		t = { section = "logic@bun_ptr3_patrol1",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+
+       t = { section = "logic@bun_ptr3_patrol2",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr3_patrol3",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr3_patrol4",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr3_patrol11",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+
+       t = { section = "logic@bun_ptr3_patrol21",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr3_patrol31",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr3_patrol41",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+       end
+       
+       
+       if type == "bun_ptr4" then
+		t = { section = "logic@bun_ptr4_patrol1",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+
+       t = { section = "logic@bun_ptr4_patrol2",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr4_patrol3",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr4_patrol4",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr4_patrol11",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+
+       t = { section = "logic@bun_ptr4_patrol21",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr4_patrol31",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr4_patrol41",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+       end
+       
+       
+       if type == "bun_ptr5" then
+		t = { section = "logic@bun_ptr5_patrol1",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+
+       t = { section = "logic@bun_ptr5_patrol2",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr5_patrol3",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr5_patrol4",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr5_patrol11",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+
+       t = { section = "logic@bun_ptr5_patrol21",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr5_patrol31",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr5_patrol41",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+       end
+       
+       
+       if type == "bun_ptr6" then
+		t = { section = "logic@bun_ptr6_patrol1",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+
+       t = { section = "logic@bun_ptr6_patrol2",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr6_patrol3",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr6_patrol4",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr6_patrol11",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+
+       t = { section = "logic@bun_ptr6_patrol21",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr6_patrol31",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr6_patrol41",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+       end
+       
+       
+       if type == "bun_ptr7" then
+		t = { section = "logic@bun_ptr7_patrol1",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+
+       t = { section = "logic@bun_ptr7_patrol2",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr7_patrol3",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr7_patrol4",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr7_patrol11",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+
+       t = { section = "logic@bun_ptr7_patrol21",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr7_patrol31",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr7_patrol41",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+       end
+       
+       
+       if type == "bun_ptr8" then
+		t = { section = "logic@bun_ptr8_patrol1",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+
+       t = { section = "logic@bun_ptr8_patrol2",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr8_patrol3",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr8_patrol4",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr8_patrol11",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+
+       t = { section = "logic@bun_ptr8_patrol21",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_ptr8_patrol31",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+		t = { section = "logic@bun_ptr8_patrol41",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+       end
+       
+        if type == "bun_snp1" then
+		t = { section = "logic@bun_snp1_sniper1",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_snp1_sniper11",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+      end
+      
+      
+        if type == "bun_ptr20" then
+		t = { section = "logic@bun_ptr20_walker11",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+       table.insert(sj, t)	
+       t = { section = "logic@bun_ptr20_walker21",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false, 
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)
+			t = { section = "logic@bun_ptr20_walker1",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+       table.insert(sj, t)	
+       t = { section = "logic@bun_ptr20_walker2",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		end
+      
+      
+      if type == "bun_post" then
+		t = { section = "logic@bun_post_sniper1",
+			idle = 0,
+			prior = 1, state = {0},
+			online = false,
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_post_sniper11",
+			idle = 0,
+			prior = 1, state = {1},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		
+		
+      end
+      
+      
+       
+       
+		
+      
+       if type == "bun_krovosos_nest" then
+		t = { section = "logic@bun_krovosos_nest_krovosos1",
+			idle = 0,
+			prior = 1, state = {0},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		t = { section = "logic@bun_krovosos_nest_krovosos2",
+			idle = 0,
+			prior = 5, state = {0},
+			in_rest = "", out_rest = ""
+		}
+		table.insert(sj, t)	
+		
+      end
+      
+
+end
+
+function load_states(gname, type)
+ 
+   if type == "bun_kordon1" then
+		return function(gulag)
+			if db.actor:has_info("bun_antenna_off") then
+				return 1
+			else
+				return 0
+			end
+		end
+	end
+   
+   if type == "bun_kordon2" then
+		return function(gulag)
+			if db.actor:has_info("bun_ptr2") then
+				return 1
+			else
+				return 0
+			end
+		end
+	end
+	
+	if type == "bun_kordon3" then
+		return function(gulag)
+			if db.actor:has_info("bun_ptr4") then
+				return 1
+			else
+				return 0
+			end
+		end
+	end
+	
+	if type == "bun_ptr20" then
+		return function(gulag)
+			if db.actor:has_info("bun_patrol_start") then
+				return 1
+			else
+				return 0
+			end
+		end
+	end
+	
+	if type == "bun_post" then
+		return function(gulag)
+			if db.actor:has_info("bun_antenna_off") then
+				return 1
+			else
+				return 0
+			end
+		end
+	end
+	
+	if type == "bun_ptr1" then
+		return function(gulag)
+			if db.actor:has_info("bun_ptr1") then
+				return 1
+			else
+				return 0
+			end
+		end
+	end
+	
+	if type == "bun_ptr2" then
+		return function(gulag)
+			if db.actor:has_info("bun_antenna_off") then
+				return 1
+			else
+				return 0
+			end
+		end
+	end
+	
+	if type == "bun_ptr3" then
+		return function(gulag)
+			if db.actor:has_info("bun_antenna_off") then
+				return 1
+			else
+				return 0
+			end
+		end
+	end
+	
+	if type == "bun_ptr4" then
+		return function(gulag)
+			if db.actor:has_info("bun_antenna_off") then
+				return 1
+			else
+				return 0
+			end
+		end
+	end
+	
+	if type == "bun_ptr5" then
+		return function(gulag)
+			if db.actor:has_info("+bun_actor_vstal") then
+				return 1
+			else
+				return 0
+			end
+		end
+	end
+	
+	if type == "bun_ptr6" then
+		return function(gulag)
+			if db.actor:has_info("bun_ptr3") then
+				return 1
+			else
+				return 0
+			end
+		end
+	end
+	
+	if type == "bun_ptr7" then
+		return function(gulag)
+			if db.actor:has_info("bun_antenna_off") then
+				return 1
+			else
+				return 0
+			end
+		end
+	end
+	
+	if type == "bun_ptr8" then
+		return function(gulag)
+			if db.actor:has_info("bun_ptr4") then
+				return 1
+			else
+				return 0
+			end
+		end
+	end
+	
+	if type == "bun_snp1" then
+		return function(gulag)
+			if db.actor:has_info("bun_antenna_off") then
+				return 1
+			else
+				return 0
+			end
+		end
+	end
+	
+	if type == "bun_snp2" then
+		return function(gulag)
+			if db.actor:has_info("bun_antenna_off") then
+				return 1
+			else
+				return 0
+			end
+		end
+	end
+	
+	
+	
+	
+    if type == "bun_krovosos_nest" then
+		return function(gulag)
+			return 0
+		end
+	end
+
+end
+
+
+--------------------------------------------------------------------------
+-- Dynamic ltx
+--------------------------------------------------------------------------
+function load_ltx(gname, type)
+	return nil
+end
+--------------------------------------------------------------------------
+function checkStalker(npc_community, gulag_type)
+    
+    if gulag_type == "bun_kordon1" then
+	   return npc_community == "monolith"
+	end
+	
+	if gulag_type == "bun_ptr20" then
+	   return npc_community == "monolith"
+	end
+	
+	if gulag_type == "bun_kordon2" then
+	   return npc_community == "monolith"
+	end
+	
+	if gulag_type == "bun_kordon3" then
+	   return npc_community == "monolith"
+	end
+	
+	if gulag_type == "bun_post" then
+	   return npc_community == "monolith"
+	end
+	
+	
+	if gulag_type == "bun_snp1" then
+	   return npc_community == "monolith"
+	end
+	
+	if gulag_type == "bun_snp2" then
+	   return npc_community == "monolith"
+	end
+	
+	if gulag_type == "bun_ptr1" then
+	   return npc_community == "monolith"
+	end
+	
+	if gulag_type == "bun_ptr2" then
+	   return npc_community == "monolith"
+	end
+	
+	if gulag_type == "bun_ptr3" then
+	   return npc_community == "monolith"
+	end
+	
+	if gulag_type == "bun_ptr4" then
+	   return npc_community == "monolith"
+	end
+	
+	if gulag_type == "bun_ptr5" then
+	   return npc_community == "monolith"
+	end
+	
+	if gulag_type == "bun_ptr6" then
+	   return npc_community == "monolith"
+	end
+	
+	if gulag_type == "bun_ptr7" then
+	   return npc_community == "monolith"
+	end
+	
+	if gulag_type == "bun_ptr8" then
+	   return npc_community == "monolith"
+	end
+
+	return false
+end
+
+function checkMonster( npc_community, gulag_type )
+
+   if gulag_type == "bun_krovosos_nest" then
+	   return npc_community == "bloodsucker"
+	end 
+	return false
+end

@@ -1,0 +1,249 @@
+//#include "SSAO_options.cfg"
+#include "common.h"
+#include "lmodel.h"
+#include "hmodel.h"
+#include "f42_weather.h"
+
+// GRM contact occlusion, inspired by Modified SSAO/SSDO (Anomaly), adapted for R2.
+// Only uses the existing position buffer. Eight samples, two radii.
+float grm_ao_sample(float2 uv, float3 p, float3 n)
+{
+    // Reject off-screen taps rather than stretching edge pixels into a dark border.
+    float in_bounds = step(0.001f,uv.x)*step(0.001f,uv.y)*step(uv.x,0.999f)*step(uv.y,0.999f);
+    float3 q = tex2D(s_position, clamp(uv,0.001f,0.999f)).xyz;
+    float3 delta = q-p;
+    float dist = sqrt(max(dot(delta,delta),0.000001f));
+    float facing = saturate(dot(delta,n)/dist - 0.10f);
+    float valid = in_bounds * step(0.02f,q.z) * smoothstep(0.025f,0.10f,dist);
+    float separation = 1.0f-smoothstep(0.65f,1.50f,abs(q.z-p.z));
+    float range = 1.0f-smoothstep(0.20f,1.00f,dist);
+    return facing * valid * separation * range;
+}
+float grm_contact_ao(float2 uv,float3 p,float3 n)
+{
+    float len2 = dot(n,n);
+    float3 nn = n*rsqrt(max(len2,0.0001f));
+    float r = clamp(0.034f/max(p.z,1.0f),0.0010f,0.020f);
+    float2 xy = float2(r,r*1.25f);
+    float sum = 0.0f;
+    sum += grm_ao_sample(uv+xy*float2( 0.55f, 0.00f),p,nn);
+    sum += grm_ao_sample(uv+xy*float2(-0.55f, 0.00f),p,nn);
+    sum += grm_ao_sample(uv+xy*float2( 0.00f, 0.55f),p,nn);
+    sum += grm_ao_sample(uv+xy*float2( 0.00f,-0.55f),p,nn);
+    sum += grm_ao_sample(uv+xy*float2( 0.70f, 0.70f),p,nn);
+    sum += grm_ao_sample(uv+xy*float2(-0.70f, 0.70f),p,nn);
+    sum += grm_ao_sample(uv+xy*float2( 0.70f,-0.70f),p,nn);
+    sum += grm_ao_sample(uv+xy*float2(-0.70f,-0.70f),p,nn);
+    float valid = step(0.02f,p.z)*step(0.01f,len2)*(1.0f-smoothstep(40.0f,70.0f,p.z));
+    return 1.0f - saturate(sum*0.28f)*valid*0.85f;
+}
+
+// GRM IRADER-inspired dust approximation. Not true volumetric lighting.
+// Uses existing combine-pass sun, camera, time, fog and hemi values only.
+float grm_dust_hash(float2 p)
+{
+    float3 q = frac(float3(p.x,p.y,p.x)*0.1031f);
+    q += dot(q,q.yzx+33.33f);
+    return frac((q.x+q.y)*q.z);
+}
+float grm_dust_noise(float2 p)
+{
+    float2 i=floor(p), f=frac(p);
+    float2 u=f*f*(3.0f-2.0f*f);
+    float a=grm_dust_hash(i), b=grm_dust_hash(i+float2(1.0f,0.0f));
+    float c=grm_dust_hash(i+float2(0.0f,1.0f));
+    float d=grm_dust_hash(i+float2(1.0f,1.0f));
+    return lerp(lerp(a,b,u.x),lerp(c,d,u.x),u.y);
+}
+
+struct         _input      {
+        float4         hpos        : POSITION        ;
+          // This renderer binds r_Pass("null", "combine_1", ...).
+          // No custom VS is available to supply a tonemap value in tc0.w.
+          float2         tc0                : TEXCOORD0        ;        // tc.xy
+};
+
+struct        _out                {
+        half4        low                : COLOR0        ;
+        half4        high        : COLOR1        ;
+};
+
+uniform sampler1D         fog_table        ;
+_out         main                ( _input I )
+{
+          // Sample the buffers:
+          float4 P        = tex2D         (s_position,      I.tc0);                // position.(mtl or sun)
+          half4 N         = tex2D         (s_normal,        I.tc0);                // normal.hemi
+          half4 D         = tex2D         (s_diffuse,       I.tc0);                // rgb.gloss
+          half4 L         = tex2D         (s_accumulator, 	I.tc0);                // diffuse.specular
+
+#ifdef         USE_SUPER_SPECULAR
+        {
+                half        ds      	= dot        (D.rgb,1.h/3.h)  	;
+                       		D.w         = max        (D.w, 	ds*ds/8.h)	;
+        }
+#endif
+
+#ifdef  FORCE_GLOSS
+        D.w                =        FORCE_GLOSS                ;
+#endif
+
+#ifdef         USE_GAMMA_22
+        D.rgb        =        (D.rgb*D.rgb)        ;        // pow(2.2)
+#endif
+
+        // static sun
+	half mtl 		= P.w;
+
+
+
+
+
+
+
+
+#ifdef USE_R2_STATIC_SUN
+	
+half sun_occ = P.w*2	;
+
+//mtl = xmaterial;  //стандарт, блеска металла нет
+mtl = 0.1;          //слабый
+//mtl = 0.7;        //много
+
+L +=  half4(L_sun_color, 1) * sun_occ * plight_infinity(mtl, P.xyz, N.xyz, L_sun_dir_e);
+
+#endif
+
+
+
+
+
+//#include "SSAO_combine_1.h"
+
+        // hemisphere
+        half3       hdiffuse,hspecular;
+
+        hmodel		(hdiffuse, hspecular, mtl, N.w, D.w, P.xyz, N.xyz);
+        half grm_occ = (half)lerp(1.0f, grm_contact_ao(I.tc0, P.xyz, N.xyz), smoothstep(0.75f, 1.50f, P.z));
+        hdiffuse *= grm_occ;
+        hspecular *= grm_occ;
+		//			hdiffuse*=hdiffuse;			//. high contrast hemi
+
+        half4         light       = half4         (L.rgb + hdiffuse, L.w)        ;
+        half4         C           = D*light       ;                                                        // rgb.gloss * light(diffuse.specular)
+        half3         spec        = C.www         + hspecular;        // replicated specular
+#ifdef         USE_SUPER_SPECULAR
+                      spec      = (C.rgb*.5h + .5h)*C.w + hspecular        ;
+#endif
+		half3       color     = C.rgb + spec     ;
+
+		//color = pow(color, 0.5);
+
+        //. color + hemi + sun + lighting + specular
+		//			color 	= 	hdiffuse+hspecular+L.rgb+spec+C.rgb;
+        //. hemi + sun + lighting + specular
+		//			color 	= 	hdiffuse+hspecular+L.rgb+spec;
+		//. hemi + sun + lighting no specular
+		//			color 	= 	hdiffuse+hspecular+L.rgb;
+		//. hemi + sun no specular
+		//			color 	= 	hdiffuse+hspecular+L.rgb;
+		//. sun + lighting + specular
+		//			color 	= 	hspecular+L.rgb+spec;
+		//. only lighting and specular
+		// color 		= light.rgb + spec;
+
+        // here should be distance fog
+        float3        	pos        		= P.xyz;
+        float         	distance		= length		(pos);
+        float fog = f42_weather_fog(distance);
+        // TEST7: a small far-distance contrast tail avoids uniform painted silhouettes.
+        // Mid/near haze stays almost unchanged; this is an artistic, not volumetric model.
+        float f42_tail=0.06f*(float)f42_weather_active()*smoothstep(0.35f,1.0f,fog);
+        fog=saturate(fog*(1.0f-f42_tail));
+        // GRM test: subtle low-altitude haze, limited by distance and sky exposure.
+        // World height is absolute, so its appearance depends on the level elevation.
+        float3 grm_fog_world = mul(pos, (float3x3)m_V) + eye_position;
+        float grm_low = 1.0f - smoothstep(-5.0f, 15.0f, grm_fog_world.y);
+        float grm_range = smoothstep(35.0f, 100.0f, distance);
+        float grm_open = smoothstep(0.15f, 0.55f, (float)saturate(N.w));
+        float grm_extra = 0.10f * grm_low * grm_range * grm_open * (float)f42_weather_active() * (1.0f - 0.25f * smoothstep(0.65f, 1.0f, fog));
+        fog = saturate(fog + (1.0f-fog)*grm_extra);
+        // Плотный ближний туман только для специальной погоды Darkscape.
+        // Первая зона остаётся чистой, чтобы не закрывать оружие у камеры.
+        // Darkscape: a weather tag, with a bounded fog/range fallback if hemi alpha
+        // is not passed through unchanged by this renderer. No location API required.
+        float grm_dark_alpha = 1.0f - smoothstep(0.015f, 0.040f, abs((float)L_hemi_color.w - 1.25f));
+        float grm_dark_g = max((float)fog_color.g, 0.001f);
+        float grm_dark_ratio = max(abs((float)fog_color.r / grm_dark_g - 0.98f),
+                                   abs((float)fog_color.b / grm_dark_g - 1.02f));
+        float grm_dark_far = (1.0f - fog_params.x) / max(fog_params.w, 0.00001f);
+        float grm_dark_range = smoothstep(40.0f, 48.0f, grm_dark_far) *
+                               (1.0f - smoothstep(62.0f, 70.0f, grm_dark_far));
+        float grm_dark_signature = (1.0f - smoothstep(0.008f, 0.020f, grm_dark_ratio)) * grm_dark_range;
+        float grm_dark_tag = saturate(max(grm_dark_alpha, grm_dark_signature));
+        // Exponential depth haze: almost clear for the weapon, soft dense falloff for scenery.
+        float grm_dark_depth = max(distance - 1.75f, 0.0f);
+        float grm_dark_near = (1.0f - exp2(-0.20f * grm_dark_depth)) * smoothstep(1.75f, 4.5f, distance);
+        fog = lerp(fog, max(fog, grm_dark_near), grm_dark_tag);
+        float3 f42_view_dir=pos/max(distance,0.001f);
+        f42_view_dir.z += 1.0f-step(0.001f,distance); // safe cube direction for empty depth
+        float3 f42_sky_dir=mul(f42_view_dir,(float3x3)m_V);
+        half3 f42_sky_hint=lerp(texCUBEbias(sky_s0,float4(f42_sky_dir,4.0f)).rgb,
+                                  texCUBEbias(sky_s1,float4(f42_sky_dir,4.0f)).rgb,env_color.w);
+        half3 f42_air=f42_weather_fog_colour(f42_sky_hint);
+        // Match the sky shader's gray fog target, rather than using an unscaled cube sample.
+        half grm_air_luma = dot(max(fog_color.rgb, 0.0h), half3(0.2126h, 0.7152h, 0.0722h));
+        half3 grm_gray_air = half3(grm_air_luma, grm_air_luma, grm_air_luma);
+        f42_air = lerp(f42_air, grm_gray_air, (half)grm_dark_tag);
+                      	color			= lerp     		(color,f42_air,fog);
+        half grm_scene_luma = dot(max(color, 0.0h), half3(0.2126h, 0.7152h, 0.0722h));
+        color = lerp(color, half3(grm_scene_luma, grm_scene_luma, grm_scene_luma), (half)(0.26f * grm_dark_tag));        			//
+
+        // Approximate moving airborne haze on geometry (not physical particles or rays).
+        // Sun exposure and shelter are estimated; fixed drift is not actual wind.
+        float3 grm_mid_world = mul(pos*0.50f,(float3x3)m_V)+eye_position;
+        float2 grm_dust_uv = grm_mid_world.xz + grm_mid_world.y*float2(0.35f,0.19f);
+        float grm_t = timers.x;
+        float grm_broad = grm_dust_noise(grm_dust_uv*0.11f + float2(0.018f,-0.011f)*grm_t);
+        float grm_fine = grm_dust_noise(grm_dust_uv*0.37f + float2(0.035f,0.024f)*grm_t + 11.7f);
+        float grm_cloud = smoothstep(0.20f,0.68f,0.72f*grm_broad+0.28f*grm_fine);
+        float grm_sun_luma = dot(max((float3)Ldynamic_color.rgb,0.0f),float3(0.2126f,0.7152f,0.0722f));
+        float grm_day = smoothstep(0.01f,0.14f,grm_sun_luma);
+        float grm_open_dust = smoothstep(0.08f,0.38f,(float)saturate(N.w));
+        float grm_dist_dust = smoothstep(3.0f,16.0f,distance)*(1.0f-smoothstep(110.0f,180.0f,distance));
+        float grm_dry = 1.0f-0.75f*(float)f42_weather_wetness();
+        float grm_dust_amt = 0.38f*grm_cloud*grm_day*grm_open_dust*grm_dist_dust*grm_dry*(1.0f-0.55f*smoothstep(0.35f,0.95f,fog));
+        grm_dust_amt *= 1.0f - grm_dark_tag * smoothstep(0.35f, 0.85f, fog);
+        half3 grm_dust_color = lerp(f42_air, (half3)saturate(Ldynamic_color.rgb), 0.35h);
+        color = lerp(color,grm_dust_color,(half)grm_dust_amt);
+
+        half        	skyblend		= saturate		(fog*fog);
+
+#ifdef         DBG_TMAPPING
+        color                        	= D.xyz;
+#endif
+
+        // final tone-mapping
+        // Read exposure in PS for BOTH VTF and non-VTF variants.
+        // s_tonemap is explicitly bound by this DLL's combine pass.
+        half         	tm_scale        = tex2D        (s_tonemap,I.tc0).x;
+
+// TEST6: do not bypass diffuse lighting and fog with a late debug override.
+
+        _out        	o;
+        tonemap        	(o.low, o.high, color, tm_scale )	;
+        // Night-only, outdoor-weighted display toe. Keeps black zero and preserves hue.
+        // High HDR/bloom stays untouched: this is shadow readability, not luminous surfaces.
+        half f42_read=f42_weather_night()*smoothstep(0.05h,0.45h,saturate(N.w))*(1.0h-(half)fog);
+        half f42_Y=dot(max(o.low.rgb,0.0h),half3(0.2126h,0.7152h,0.0722h));
+        half f42_toe=0.050h*f42_Y/(f42_Y+0.018h)*(1.0h-smoothstep(0.08h,0.24h,f42_Y));
+        o.low.rgb *= 1.0h+f42_read*f42_toe/max(f42_Y,0.0001h);
+
+                        o.low.a         = skyblend	;
+						o.high.a		= skyblend	;
+
+//		o.low	= skyblend;
+//		o.hight	= 0;
+
+		return        	o;
+}

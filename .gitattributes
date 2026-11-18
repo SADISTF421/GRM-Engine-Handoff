@@ -1,0 +1,5 @@
+*.script -text
+*.ps -text
+*.vs -text
+*.h -text
+*.ltx -text

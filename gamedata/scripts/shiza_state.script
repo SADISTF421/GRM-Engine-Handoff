@@ -1,0 +1,36 @@
+
+
+local PREFIX = "shiza_state_v1_"
+function number(state, key, fallback, lo, hi)
+    local value = state and tonumber(state[key]) or nil
+    if not value or value ~= value or value == math.huge or value == -math.huge then value = fallback end
+    if lo then value = math.max(lo, value) end
+    if hi then value = math.min(hi, value) end
+    return value
+end
+function left(deadline, now)
+    return math.max(0, (deadline or 0) - (now or time_global()))
+end
+function write(actor, name, state)
+    local keys = {}
+    for key, value in pairs(state) do
+        if type(value) == "number" and value == value and math.abs(value) < math.huge then
+            keys[#keys + 1] = key
+        end
+    end
+    table.sort(keys)
+    local fields = {"1"}
+    for _, key in ipairs(keys) do fields[#fields + 1] = key .. "=" .. string.format("%.9g", state[key]) end
+    xr_logic.pstor_store(actor, PREFIX .. name, table.concat(fields, ";"))
+end
+function read(actor, name)
+    local text = xr_logic.pstor_retrieve(actor, PREFIX .. name, "")
+    if type(text) ~= "string" or #text > 4096 or text:sub(1,2) ~= "1;" then return nil end
+    local result = {}
+    for key, value in string.gmatch(text:sub(3), "([%w_]+)=([^;]+)") do
+        local n = tonumber(value)
+        if not n or n ~= n or math.abs(n) == math.huge then return nil end
+        result[key] = n
+    end
+    return result
+end

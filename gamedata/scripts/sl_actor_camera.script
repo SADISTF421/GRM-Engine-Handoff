@@ -1,0 +1,253 @@
+-- HP15 camera/audio + direct item-acquisition camera test.
+-- No input lock, inventory edits, damage changes or movement effects.
+local HP_START = 0.15
+local HP_STOP = 0.20
+local HP_ID = 28742
+local PICKUP_ID = 28743
+local PICKUP_MS = 500
+local HP_ANM = "actor_move\\hp.anm"
+local PICKUP_ANM = "actor_move\\mod_act_punch_1.anm"
+local hp_active, low_hp = false, false
+local hp_disabled, pickup_disabled = false, false
+local pickup_until = 0
+local pickup_active = false
+local ready_after = nil
+local debug_count = 0
+local audio = {
+    {path="actor\\heartbeat", volume=0.55},
+    {path="actor\\breath_2", volume=0.45}
+}
+local function pickup_log(message)
+    if debug_count < 20 then
+        printf("[sl_actor_camera] pickup: %s", message)
+        debug_count = debug_count + 1
+    end
+end
+local function stop_audio()
+    for _, entry in ipairs(audio) do
+        if entry.sound then pcall(function() entry.sound:stop() end) end
+        entry.sound = nil
+    end
+end
+local function update_audio(actor)
+    for _, entry in ipairs(audio) do
+        if not entry.failed then
+            local ok, err = pcall(function()
+                if not entry.sound then entry.sound = sound_object(entry.path) end
+                if not entry.sound:playing() then
+                    entry.sound:play_at_pos(actor, vector():set(0,0,0), 0,
+                        sound_object.s2d + sound_object.looped)
+                end
+                entry.sound.volume = entry.volume
+            end)
+            if not ok then
+                if entry.sound then pcall(function() entry.sound:stop() end) end
+                entry.sound = nil
+                entry.failed = true
+                printf("[sl_actor_camera] Sound error %s: %s", entry.path, tostring(err))
+            end
+        end
+    end
+end
+
+local function stop_hp()
+    stop_audio()
+    if hp_active then level.remove_cam_effector(HP_ID); hp_active = false end
+end
+local function stop_pickup()
+    if pickup_active then level.remove_cam_effector(PICKUP_ID); pickup_active = false end
+    pickup_until = 0
+end
+local function blocked(actor)
+    if actor:is_talking() or actor:has_info("disabled_ui") then return true end
+    if shiza_hud_items and shiza_hud_items.is_using_item and shiza_hud_items.is_using_item() then return true end
+    if shiza_radiation and shiza_radiation.is_death_started and shiza_radiation.is_death_started() then return true end
+    if shiza_vodka and shiza_vodka.is_death_started and shiza_vodka.is_death_started() then return true end
+    return false
+end
+local function start_camera(path, id, loop)
+    local ok, err = pcall(function() level.add_cam_effector(path, id, loop, "") end)
+    if not ok then printf("[sl_actor_camera] Camera error: %s", tostring(err)) end
+    return ok
+end
+-- Under Fire-style hit reaction: health loss, not a bullet-event callback.
+local DAMAGE_PP_ID, DAMAGE_CAM_ID = 52761, 52762
+local DAMAGE_PP = "grm_under_fire_hit\\focus_hit.ppe"
+local DAMAGE_CAM = "grm_under_fire_hit\\hit_recoil.anm"
+local BLOODSUCKER_CAM = "camera_effects\\hit_front.anm"
+local BLOODSUCKER_CHANCE = 35
+local bloodsucker_hit_until = 0
+
+function on_bloodsucker_hit(who, amount)
+    if not who or type(amount) ~= "number" or amount <= 0 then return end
+    local ok, id = pcall(function() return who:clsid() end)
+    if not ok or not clsid or (id ~= clsid.bloodsucker and id ~= clsid.bloodsucker_s) then return end
+    if math.random(100) <= BLOODSUCKER_CHANCE then
+        bloodsucker_hit_until = time_global() + 500
+        printf("[GRM_BLOODSUCKER] Hit selected for camera effect")
+    end
+end
+local damage_health, damage_next, damage_until = nil, 0, 0
+local damage_pp_active, damage_cam_active = false, false
+local damage_debug = 0
+local damage_overlay, damage_overlay_at, damage_overlay_alpha = nil, 0, 0
+local damage_overlay_failed, damage_sound_failed = false, false
+local damage_sound = nil
+local function damage_overlay_remove()
+    if damage_overlay then
+        local old = damage_overlay
+        damage_overlay = nil
+        pcall(function() get_hud():RemoveDialogToRender(old) end)
+    end
+    damage_overlay_at, damage_overlay_alpha = 0, 0
+end
+local function damage_overlay_start(now, lost)
+    if damage_overlay_failed then return end
+    local alpha = math.floor(math.min(0.68, 0.34 + lost * 1.5) * 255)
+    if not damage_overlay then
+        local ok, result = pcall(function()
+            local v = CUIStatic()
+            v:Init(0, 0, 1024, 768)
+            v:SetStretchTexture(true)
+            v:InitTexture("ui\\grm_under_fire_edge")
+            v:SetColor(GetARGB(alpha, 255, 255, 255))
+            get_hud():AddDialogToRender(v)
+            return v
+        end)
+        if not ok or not result then
+            damage_overlay_failed = true
+            printf("[GRM_UF] Overlay unavailable: %s", tostring(result))
+            return
+        end
+        damage_overlay = result
+    end
+    damage_overlay_at, damage_overlay_alpha = now, alpha
+    local ok, err = pcall(function() damage_overlay:SetColor(GetARGB(alpha, 255, 255, 255)) end)
+    if not ok then
+        printf("[GRM_UF] Overlay color error: %s", tostring(err))
+        damage_overlay_remove()
+        damage_overlay_failed = true
+    end
+end
+local function damage_overlay_update(now)
+    if not damage_overlay then return end
+    local age = now - damage_overlay_at
+    if age < 0 or age >= 900 then damage_overlay_remove(); return end
+    local fade = 1 - age / 900
+    local alpha = math.floor(damage_overlay_alpha * fade * fade)
+    local ok, err = pcall(function() damage_overlay:SetColor(GetARGB(alpha, 255, 255, 255)) end)
+    if not ok then
+        printf("[GRM_UF] Overlay update error: %s", tostring(err))
+        damage_overlay_remove()
+        damage_overlay_failed = true
+    end
+end
+local function damage_sound_play(actor)
+    if damage_sound_failed then return end
+    local ok, err = pcall(function()
+        if not damage_sound then damage_sound = sound_object("grm_under_fire_hit\\bullet_impact") end
+        damage_sound:play_no_feedback(actor, sound_object.s2d, 0, vector():set(0, 0, 0), 0.55)
+    end)
+    if not ok then
+        damage_sound_failed = true
+        printf("[GRM_UF] Sound unavailable: %s", tostring(err))
+    end
+end
+local function damage_reset()
+    bloodsucker_hit_until = 0
+    damage_overlay_remove()
+    if damage_pp_active then pcall(function() level.remove_pp_effector(DAMAGE_PP_ID) end) end
+    if damage_cam_active then pcall(function() level.remove_cam_effector(DAMAGE_CAM_ID) end) end
+    damage_health, damage_next, damage_until = nil, 0, 0
+    damage_pp_active, damage_cam_active = false, false
+end
+local function damage_update(actor, now)
+    damage_overlay_update(now)
+    local health = actor.health
+    if type(health) ~= "number" then damage_health = nil; return end
+    local lost = damage_health and damage_health - health or 0
+    damage_health = health
+    if damage_until > 0 and now >= damage_until then
+        damage_pp_active, damage_cam_active, damage_until = false, false, 0
+    end
+    local bloodsucker_hit = bloodsucker_hit_until > 0 and now <= bloodsucker_hit_until
+    if lost > 0 or now > bloodsucker_hit_until then bloodsucker_hit_until = 0 end
+    if lost < 0.003 or now < damage_next or not ready_after or now < ready_after then return end
+    damage_next = now + 350
+    damage_until = now + 700
+    damage_overlay_start(now, lost)
+    damage_sound_play(actor)
+    local ok, err = pcall(function() level.add_pp_effector(DAMAGE_PP, DAMAGE_PP_ID, false) end)
+    if ok then damage_pp_active = true else printf("[GRM_UF] PP error: %s", tostring(err)) end
+    local damage_camera = bloodsucker_hit and BLOODSUCKER_CAM or DAMAGE_CAM
+    ok, err = pcall(function() level.add_cam_effector(damage_camera, DAMAGE_CAM_ID, false, "") end)
+    if ok then damage_cam_active = true else printf("[GRM_UF] Camera error: %s", tostring(err)) end
+    if damage_debug < 5 then
+        printf("[GRM_UF] Health loss %.4f: damage reaction", lost)
+        damage_debug = damage_debug + 1
+    end
+end
+
+function reset()
+    pcall(function() grm_recoil.reset() end)
+    damage_reset()
+    damage_debug = 0
+    damage_overlay_failed, damage_sound_failed = false, false
+    stop_hp()
+    stop_pickup()
+    -- Remove only the obsolete jump effect from the previous test.
+    level.remove_cam_effector(28741)
+    low_hp = false
+    hp_disabled, pickup_disabled = false, false
+    ready_after = nil
+    debug_count = 0
+    for _, entry in ipairs(audio) do entry.failed = false end
+end
+function update(actor)
+    pcall(function() grm_recoil.update(actor) end)
+    if not actor or not actor:alive() then
+        damage_reset()
+        stop_hp(); stop_pickup(); low_hp=false; ready_after=nil
+        return
+    end
+    local now = time_global()
+    if device().precache_frame > 0 then
+        damage_reset()
+        stop_hp(); stop_pickup(); ready_after=nil
+        return
+    end
+    if not ready_after then ready_after = now + 1000 end
+    if blocked(actor) then
+        damage_overlay_remove()
+        damage_health = actor.health
+        stop_hp(); stop_pickup()
+        return
+    end
+    damage_update(actor, now)
+    if actor.health <= HP_START then low_hp = true
+    elseif actor.health >= HP_STOP then low_hp = false end
+    if pickup_active and now >= pickup_until then stop_pickup() end
+    if low_hp and not hp_disabled and not pickup_active and now >= ready_after then
+        update_audio(actor)
+        if not hp_active then
+            if start_camera(HP_ANM, HP_ID, true) then hp_active = true
+            else hp_disabled = true end
+        end
+    else
+        stop_hp()
+    end
+end
+function on_item_take(actor, obj)
+    if pickup_disabled or not actor or not obj or not actor:alive() then return end
+    local now = time_global()
+    if not ready_after or now < ready_after or device().precache_frame > 0 then return end
+    if blocked(actor) or pickup_active then return end
+    -- Deliberately use the inventory acquisition callback directly.
+    -- Includes re-picking dropped items; no crosshair or target API required.
+    stop_hp()
+    if start_camera(PICKUP_ANM, PICKUP_ID, false) then
+        pickup_log("camera STARTED from on_item_take: mod_act_punch_1.anm (0.5 seconds)")
+        pickup_active = true
+        pickup_until = now + PICKUP_MS
+    else pickup_disabled = true end
+end

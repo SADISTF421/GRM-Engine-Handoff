@@ -1,0 +1,63 @@
+-- TEST4: no new callback. Uses the existing on_game_load / restore_sun hook.
+local wthr
+local outdoor = {
+    l01_escape = "f42_cordon_fog", l02_garbage = "f42_garbage",
+    l03_agroprom = "f42_melancholy", l04_darkvalley = "f42_melancholy",
+    l05_bar = "sl_bar_soft_olive", l06_rostok = "f42_melancholy",
+    l07_military = "f42_military_storm", l08_yantar = "f42_bar",
+    l10_radar = "f42_radar_storm", l11_pripyat = "f42_north"
+}
+local ordinary = {
+    default=true, sunly=true, mrachno=true, radar=true, pripyat=true,
+    cloudy2_st=true, cloudy3_st=true, cloudy_st=true, cloudy4_st=true,
+    dark_st=true, etalon_st=true
+}
+local regional_known = {
+    grm_military_dynamic=true, grm_garbage_dynamic=true,
+    -- Отдельная мягкая дневная погода Бара; корректно переносится из сохранений.
+    sl_bar_soft_olive=true,
+    f42_melancholy=true, f42_rain=true, f42_cordon_fog=true, f42_north=true,
+    f42_garbage=true, f42_bar=true,
+    f42_military_storm=true, f42_radar_storm=true
+}
+local function route(saved)
+    local location=string.lower(level.name())
+    -- На первой локации всегда восстанавливаем один постоянный цикл.
+    if location=="first_location" then return "sl_first_location_fixed" end
+    -- Regional weather only; story and unknown cycles remain intact.
+    local known = ordinary[saved] or regional_known[saved] or saved=="rain" or saved=="cloudy5_st"
+    if location=="k01_darkscape" and (known or saved=="sl_darkscape_gloom") then
+        return "sl_darkscape_gloom"
+    end
+    if location=="l08_yantar" and db.actor and db.actor:has_info("bun_antenna_off") then
+        if known or saved=="yantar" or saved=="grm_yantar_dry" then return "grm_yantar_dry" end
+    end
+    local target=outdoor[location]
+    if not target then return saved end
+    if saved=="grm_military_dynamic" or saved=="grm_garbage_dynamic" then return target end
+    -- Migrate ordinary/known F42 saves on regional levels only.
+    -- Story, WFX and unknown controller cycles remain untouched.
+    if location=="l02_garbage" or location=="l05_bar" or
+       location=="l07_military" or location=="l08_yantar" or location=="l10_radar" then
+        if ordinary[saved] or regional_known[saved] or saved=="rain" or saved=="cloudy5_st" then
+            return target
+        end
+    end
+    if saved=="rain" or saved=="cloudy5_st" then return "f42_rain" end
+    if ordinary[saved] then return target end
+    -- Preserve explicit F42 selection, story weather, WFX and unknown script cycles.
+    return saved
+end
+function on_game_load()
+    wthr=route(level.get_weather())
+    -- Здесь не включаем временно небо саркофага при загрузке сохранения.
+    if string.lower(level.name())=="first_location" then
+        level.set_weather(wthr,true)
+        return
+    end
+    level.set_weather("sarkofag",true)
+    game.start_tutorial("restore_sun")
+end
+function set_sun()
+    if wthr then level.set_weather(wthr,true) end
+end

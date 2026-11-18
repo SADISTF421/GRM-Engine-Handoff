@@ -1,0 +1,162 @@
+-- SHIZOPHRENIA LOST / outdoor crows TEST1.
+-- Uses stock m_crow only. Persistent ownership and per-visit quota; no world-ID scan.
+local ENABLED = true
+local TARGET = 8 -- Additional birds owned by THIS controller, not all native birds.
+local START_DELAY = 15000
+local STEP = 1500
+local PREFIX = "sl_crows_t1_"
+local outdoor = {
+    l01_escape=true, l02_garbage=true, l03_agroprom=true,
+    l04_darkvalley=true, l05_bar=true, l06_rostok=true,
+    l07_military=true, l08_yantar=true, l10_radar=true, l11_pripyat=true
+}
+local attached, owner, next_tick, previous, halted = false, nil, 0, nil, false
+local placement_step = 0
+local function log(text)
+    if type(printf)=="function" then printf("[sl_crows] %s",tostring(text)) end
+end
+local function halt(text)
+    if not halted then log("stopped safely: "..tostring(text)) end
+    halted=true
+end
+function reset()
+    attached=false;owner=nil;next_tick=0;previous=nil;halted=false;placement_step=0
+end
+function on_actor_ready()
+    reset()
+    attached=true;owner=db and db.actor
+    local now=time_global()
+    previous=now;next_tick=now+START_DELAY
+end
+function set_enabled(value)
+    ENABLED=value==true
+    -- With false the update hook keeps cleaning owned standard crows, not native ones.
+    next_tick=0
+end
+local function store(a)
+    if not db.storage or not db.storage[a:id()] then return nil end
+    local s=db.storage[a:id()]
+    if not s.pstor then s.pstor={} end
+    return s.pstor
+end
+local function resolve(sim,value)
+    if value==nil then return true,nil,nil end
+    if type(value)~="string" then return false,"invalid ownership record" end
+    local id,name,map=value:match("^(%d+)|([^|]+)|([%w_]+)$")
+    id=tonumber(id)
+    if not id or id<0 or id>=65535 then return false,"invalid owned ID" end
+    local ok,obj=pcall(function() return sim:object(id) end)
+    if not ok then return false,"object lookup failed" end
+    if not obj then return true,nil,map end
+    local checked,match=pcall(function()
+        return obj:section_name()=="m_crow" and obj:name()==name
+    end)
+    if not checked then return false,"identity lookup failed" end
+    if not match then return true,nil,map end -- Reused ID: never delete the new owner.
+    return true,obj,map
+end
+local function release(sim,obj)
+    local ok=pcall(function() sim:release(obj,true) end)
+    if not ok then return false end
+    -- Keep ownership until the next pass confirms asynchronous removal.
+    return true
+end
+local function slot_scan(sim,st,loc,remove_all)
+    local alive,first_free,pending=0,nil,false
+    for i=1,TARGET do
+        local key=PREFIX.."slot_"..i
+        local ok,obj,map=resolve(sim,st[key])
+        if not ok then halt(obj);return nil end
+        if not obj then
+            st[key]=nil
+            if not first_free then first_free=i end
+        elseif remove_all or map~=loc then
+            if not release(sim,obj) then halt("owned crow release failed");return nil end
+            pending=true
+        else
+            alive=alive+1 -- Dead-but-present owned birds count too: no death farming.
+        end
+    end
+    return alive,first_free,pending
+end
+local function spawn_position(a,index)
+    -- A graph-validated ground point plus altitude; never alter actor vectors in place.
+    local angle=index*2.3999632297287
+    local direction=vector():set(math.sin(angle),0,math.cos(angle))
+    local distance=30+(index%4)*6
+    local vertex=level.vertex_in_direction(a:level_vertex_id(),direction,distance)
+    if not vertex or vertex<0 or vertex==4294967295 then return nil end
+    local ground=level.vertex_position(vertex)
+    if not ground then return nil end
+    local ap=a:position()
+    local dx,dz=ground.x-ap.x,ground.z-ap.z
+    if dx*dx+dz*dz<100 or dx*dx+dz*dz>6400 or math.abs(ground.y-ap.y)>12 then return nil end
+    local height=40+(index%4)*3
+    return vector():set(ground.x,ground.y+height,ground.z),vertex,a:game_vertex_id()
+end
+local function tick(a,loc,st,sim)
+    local allowed=ENABLED and outdoor[loc]==true
+    local count,free,pending=slot_scan(sim,st,loc,not allowed)
+    if count==nil or pending then return end
+    if not allowed then
+        st[PREFIX.."level"]=nil;st[PREFIX.."issued"]=nil
+        return
+    end
+    if st[PREFIX.."level"]~=loc then
+        st[PREFIX.."level"]=loc
+        st[PREFIX.."issued"]=0
+    end
+    local issued=tonumber(st[PREFIX.."issued"]) or 0
+    if issued~=issued or issued<0 or issued>TARGET or issued%1~=0 then
+        halt("invalid saved quota");return
+    end
+    if count>=TARGET or not free or issued>=TARGET then return end
+    if a:is_talking() or a:has_info("disabled_ui") then return end
+    if game and type(game.has_active_tutorial)=="function" and game.has_active_tutorial() then return end
+    if shiza_hud_items and type(shiza_hud_items.is_using_item)=="function" and shiza_hud_items.is_using_item() then return end
+    if shiza_radiation and type(shiza_radiation.is_death_started)=="function" and shiza_radiation.is_death_started() then return end
+    if shiza_vodka and type(shiza_vodka.is_death_started)=="function" and shiza_vodka.is_death_started() then return end
+    local ini=system_ini()
+    if not ini:section_exist("m_crow") then halt("m_crow section missing");return end
+    placement_step=placement_step+1
+    local pos,lv,gv=spawn_position(a,placement_step)
+    if not pos then
+        next_tick=time_global()+5000 -- Rotate the next trial; wait for an open graph point.
+        return
+    end
+    -- Count CREATE ATTEMPTS, not just successes. Reload cannot reset this quota.
+    st[PREFIX.."issued"]=issued+1
+    local ok,obj=pcall(function() return sim:create("m_crow",pos,lv,gv) end)
+    if not ok or not obj then halt("m_crow creation failed");return end
+    local checked,id,name=pcall(function() return obj.id,obj:name() end)
+    if not checked or type(id)~="number" or id<0 or id>=65535 or type(name)~="string" or name=="" or name:find("|",1,true) then
+        release(sim,obj);halt("created crow identity unavailable");return
+    end
+    st[PREFIX.."slot_"..free]=tostring(id).."|"..name.."|"..loc
+    if issued==0 then
+        local weather="unknown"
+        if type(level.get_weather)=="function" then
+            local good,value=pcall(level.get_weather)
+            if good then weather=tostring(value) end
+        end
+        log("flock started on "..loc.."; weather="..weather.."; maximum additional birds="..TARGET)
+    end
+end
+function update()
+    if not attached or halted then return end
+    local a=db and db.actor
+    if not a or a~=owner or not a:alive() then return end
+    local now=time_global()
+    if previous and now<previous then next_tick=now+START_DELAY end
+    previous=now
+    if now<next_tick then return end
+    next_tick=now+STEP
+    local st=store(a)
+    if not st then return end
+    local ok,err=pcall(function()
+        local loc=string.lower(level.name())
+        local sim=alife()
+        if sim then tick(a,loc,st,sim) end
+    end)
+    if not ok then halt(err) end
+end

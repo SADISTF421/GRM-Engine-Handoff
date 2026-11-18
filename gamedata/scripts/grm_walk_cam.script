@@ -1,0 +1,196 @@
+-- Камера движения GRM: ходьба и бег; дополнительная камера прыжка отключена.
+local ID = 28745
+local OLD_TAIL_ID = 28761
+local old_tail_cleared = false
+local transition_want = nil
+local active, disabled, warned = nil, false, false
+local effect_until = nil
+local walk_started, move_started, idle_started = nil, nil, nil
+local after_landing, post_land_want = false, nil
+local last_time = nil
+local camera_profile = nil
+local names = {
+    idle = "grm_pma_cam\\idle.anm",
+    walk = "grm_pma_cam\\walk.anm",
+    sprint = "grm_pma_cam\\sprint.anm",
+}
+local function animation_path(name)
+    if camera_profile == "light" then
+        return (string.gsub(names[name], "grm_pma_cam", "grm_pma_light", 1))
+    end
+    return names[name]
+end
+local function stop()
+    if active then pcall(function() level.remove_cam_effector(ID) end) end
+    active, effect_until, walk_started, move_started, idle_started = nil, nil, nil, nil, nil
+end
+local function clear_jump()
+    last_time = nil
+    after_landing, post_land_want = false, nil
+    transition_want = nil
+    -- Удаляем остаток старой версии; новая не удерживает камеру впереди.
+    pcall(function() level.remove_cam_effector(OLD_TAIL_ID) end)
+end
+
+function reset()
+    pcall(function() grm_live_shiza.reset() end)
+    pcall(function() grm_inertia_moves.reset() end)
+    pcall(function() grm_knife_draw_cam.reset() end)
+    pcall(function() grm_reload_demo.reset() end)
+    pcall(function() grm_weapon_draw_hide_cam.reset() end)
+    stop(); clear_jump(); camera_profile = nil; disabled, warned = false, false
+end
+local function blocked(actor)
+    if not actor or not actor:alive() or actor:is_talking() or actor.health <= 0.20 then return true end
+    if device().precache_frame > 0 or actor:has_info("disabled_ui") then return true end
+    if shiza_hud_items and shiza_hud_items.is_using_item and shiza_hud_items.is_using_item() then return true end
+    if shiza_kill_stress and shiza_kill_stress.is_active and shiza_kill_stress.is_active() then return true end
+    if shiza_radiation and shiza_radiation.is_death_started and shiza_radiation.is_death_started() then return true end
+    if shiza_vodka and shiza_vodka.is_death_started and shiza_vodka.is_death_started() then return true end
+    return false
+end
+local function hasbit(value, mask)
+    return math.floor(value / mask) % 2 == 1
+end
+local function one_shot(name, now, duration_ms)
+    -- Движок сам заменит прежний эффект этого ID в конце обновления камеры.
+    -- Не удаляем прежний заранее, иначе возможен пустой кадр на стыке.
+    active, effect_until, walk_started, move_started, idle_started = nil, nil, nil, nil, nil
+    active = name
+    effect_until = now + duration_ms
+    level.add_cam_effector(animation_path(name), ID, false, "")
+    printf("[grm_pma_camera] mode: %s", name)
+end
+local function step(actor)
+    if disabled then return end
+    if blocked(actor) then stop(); clear_jump(); return end
+    local state = level.actor_moving_state()
+    if type(state) ~= "number" then stop(); clear_jump(); return end
+    local now = time_global()
+    if last_time and now < last_time then stop(); clear_jump() end
+    last_time = now
+    if not old_tail_cleared then
+        pcall(function() level.remove_cam_effector(OLD_TAIL_ID) end)
+        old_tail_cleared = true
+    end
+    local jumping = hasbit(state,128)
+    local falling = hasbit(state,256)
+    local landed = hasbit(state,512) or hasbit(state,1024)
+    local climbing = hasbit(state,2048)
+    if climbing then stop(); clear_jump(); return end
+    -- В воздухе не запускаем свою анимацию: работает только штатная камера игры.
+    -- После касания плавно вводим ходьбу или бег, не меняя физику прыжка.
+    if jumping or falling or landed then
+        if active then stop() end
+        after_landing = true
+        transition_want = nil
+        return
+    end
+    local item = actor:active_item()
+    local section = item and item:section() or ""
+    local light = not item or section == "bolt" or section == "wpn_binoc"
+    if not light and (not isWeapon(item) or section:find("knife",1,true)
+        or section:find("grenade",1,true)) then stop(); return end
+    -- Для пустых рук, кости и бинокля используем ослабленные анимации.
+    local wanted_profile = light and "light" or "normal"
+    if camera_profile ~= wanted_profile then
+        stop()
+        transition_want, post_land_want = nil, nil
+        after_landing = false
+        camera_profile = wanted_profile
+    end
+    local moving = state % 16 ~= 0
+    local want = moving and (hasbit(state,4096) and "sprint" or "walk") or "idle"
+    -- При смене спринта смешиваем текущую фазу со следующим движением.
+    if active == "move_transition" then
+        if want == transition_want and effect_until and now < effect_until then return end
+        if want == transition_want then
+            active, effect_until, walk_started, move_started, idle_started = want, nil, nil, nil, nil
+            if want == "idle" then idle_started = now end
+            if want == "walk" or want == "sprint" then move_started = now end
+            if want == "walk" then walk_started = now end
+            transition_want = nil
+            level.add_cam_effector(animation_path(want), ID, true, "")
+            return
+        end
+        transition_want = nil
+    end
+    if move_started and ((active == "sprint" and (want == "walk" or want == "idle"))
+        or (active == "walk" and want == "sprint")) then
+        local n = active == "walk" and 26 or 64
+        local phase = math.floor(((now - move_started) % (n * 100 / 3)) / (100 / 3) + 0.5) % n
+        names.move_transition = string.format("grm_pma_cam\\trans_%s_%s_%02d.anm", active, want, phase)
+        transition_want = want
+        one_shot("move_transition", now, 200)
+        return
+    end
+    -- После приземления постепенно вводим анимацию бега или ходьбы.
+    if active == "post_landing_entry" then
+        if want == post_land_want and effect_until and now < effect_until then return end
+        if want == post_land_want then
+            active, effect_until, walk_started, move_started, idle_started = want, nil, nil, now, nil
+            if want == "walk" then walk_started = now end
+            post_land_want = nil
+            level.add_cam_effector(animation_path(want), ID, true, "")
+            printf("[grm_pma_camera] mode: %s", want)
+            return
+        end
+        post_land_want = nil
+    end
+    if after_landing then
+        after_landing = false
+        if want == "walk" or want == "sprint" then
+            post_land_want = want
+            names.post_landing_entry = "grm_pma_cam\\post_land_" .. want .. ".anm"
+            one_shot("post_landing_entry", now, 200)
+            return
+        end
+    end
+    -- После ожидания плавно смешиваем текущую позу с началом ходьбы.
+    if active == "walk_entry" then
+        if want == "walk" and effect_until and now < effect_until then return end
+        if want == "walk" then
+            active, effect_until, walk_started, move_started, idle_started = "walk", nil, now, now, nil
+            level.add_cam_effector(animation_path("walk"), ID, true, "")
+            printf("[grm_pma_camera] mode: %s", "walk")
+            return
+        end
+        -- Следующий эффект заменит текущий через очередь движка.
+    end
+    if active == "idle" and want == "walk" and idle_started then
+        local phase = math.floor(((now - idle_started) % 10000) / 100 + 0.5) % 100
+        names.walk_entry = string.format("grm_pma_cam\\idle_to_walk_%02d.anm", phase)
+        one_shot("walk_entry", now, 400)
+        return
+    end
+    -- При остановке мягко гасим приблизительную текущую фазу шага.
+    -- Новое движение или прыжок прерывают этот переход без ожидания.
+    if want == "idle" and active == "walk" and walk_started then
+        local phase = math.floor(((now - walk_started) % (2600 / 3)) / (100 / 3) + 0.5) % 26
+        names.walk_exit = string.format("grm_pma_cam\\walk_exit_%02d.anm", phase)
+        one_shot("walk_exit", now, 200)
+        return
+    end
+    if active == "walk_exit" then
+        if want == "idle" and effect_until and now < effect_until then return end
+    end
+    if active == want then return end
+    active, effect_until, walk_started, move_started, idle_started = want, nil, nil, nil, nil
+    if want == "idle" then idle_started = now end
+    if want == "walk" or want == "sprint" then move_started = now end
+    if want == "walk" then walk_started = now end
+    level.add_cam_effector(animation_path(want), ID, true, "")
+    printf("[grm_pma_camera] mode: %s", want)
+end
+function update(actor)
+    pcall(function() grm_live_shiza.update(actor) end)
+    pcall(function() grm_inertia_moves.update(actor) end)
+    pcall(function() grm_knife_draw_cam.update(actor) end)
+    pcall(function() grm_reload_demo.update(actor) end)
+    pcall(function() grm_weapon_draw_hide_cam.update(actor) end)
+    local ok, err = pcall(step,actor)
+    if not ok then
+        stop(); clear_jump(); disabled = true
+        if not warned then printf("[grm_pma_camera] disabled: %s", tostring(err)); warned = true end
+    end
+end

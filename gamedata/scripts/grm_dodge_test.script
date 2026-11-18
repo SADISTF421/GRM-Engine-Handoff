@@ -1,0 +1,132 @@
+-- Пробный уклон влево: одно попадание с нулевой силой урона и малым физическим импульсом.
+-- Значения предварительные: состояние движения может обновляться реже клавиш.
+local max_interval = 360       -- Максимальный промежуток между нажатиями, мс.
+local min_interval = 120       -- Слишком быстрый дребезг не считаем нажатием.
+local min_first_hold = 30      -- Первое нажатие должно продлиться хотя бы столько.
+local max_first_hold = 240     -- Долгое удержание не считаем первым нажатием.
+local min_release = 45         -- Время с отпущенной клавишей перед повтором.
+local second_confirm = 35      -- Второе нажатие подтверждаем с небольшой задержкой.
+local cooldown = 1600           -- Пауза после срабатывания.
+local previous = 0
+local phase, direction, first_at, released_at, second_at = 0, nil, nil, nil, nil
+local last_trigger, last_time, wait_release = nil, nil, true
+local disabled = false
+local trace = nil
+local camera_id = 28770
+local impulse_strength = 20 -- Пробное значение; реальную дистанцию задаёт физика игры.
+
+local function clear_sequence()
+    phase, direction, first_at, released_at, second_at = 0, nil, nil, nil, nil
+end
+function reset()
+    previous = 0
+    clear_sequence()
+    last_trigger, last_time, wait_release = nil, nil, true
+    disabled = false
+    trace = nil
+    pcall(function() level.remove_cam_effector(camera_id) end)
+end
+local function hasbit(value, mask)
+    return math.floor(value / mask) % 2 == 1
+end
+local function notify(actor, text, duration)
+    pcall(function()
+        actor:give_game_news(text, "ui\\ui_icons_task", Frect():set(100,150,50,50), 0, duration or 2000)
+    end)
+end
+local function start_dodge(actor, now, state)
+    last_trigger = now
+    wait_release = true
+    clear_sequence()
+    -- Не запускаем в прыжке, падении, при приземлении, на лестнице и в приседе.
+    if hasbit(state,16) or hasbit(state,128) or hasbit(state,256)
+        or hasbit(state,512) or hasbit(state,1024) or hasbit(state,2048) then return end
+    local cam = device().cam_dir
+    local length = math.sqrt(cam.x*cam.x + cam.z*cam.z)
+    if length < 0.01 then return end
+    local dx, dz = -cam.z/length, cam.x/length
+    local pos = actor:position()
+    trace = {x=pos.x, z=pos.z, dx=dx, dz=dz, start=now, at300=nil}
+    -- Это именно событие попадания. Даже при power=0 возможны штатные реакции игры.
+    local h = hit()
+    h.draftsman = actor
+    h.type = hit.wound
+    h.power = 0
+    h.impulse = impulse_strength
+    h.direction = vector():set(dx,0,dz)
+    actor:hit(h)
+    -- Отдельный короткий относительный эффект; основную камеру движения не выключаем.
+    local ok = pcall(function() level.add_cam_effector("grm_dodge\\left.anm",camera_id,false,"") end)
+    if ok then notify(actor, "IMPULSE LEFT: RELEASE A", 2200)
+    else notify(actor, "IMPULSE LEFT: CAMERA ERROR", 6000) end
+end
+local function update_trace(actor, now)
+    if not trace then return end
+    local p = actor:position()
+    local projected = (p.x-trace.x)*trace.dx + (p.z-trace.z)*trace.dz
+    local elapsed = now-trace.start
+    if elapsed >= 300 and not trace.at300 then trace.at300 = projected end
+    if elapsed >= 1100 then
+        notify(actor, string.format("IMPULSE DIAG 0.3s:%+.2f 1.1s:%+.2f",trace.at300 or 0,projected), 10000)
+        trace = nil
+    end
+end
+local function step(actor)
+    if disabled then return end
+    if not actor or not actor:alive() or actor:is_talking() or actor.health <= 0
+        or device().precache_frame > 0 or actor:has_info("disabled_ui") then
+        clear_sequence(); previous = 0; wait_release = true
+        return
+    end
+    local state = level.actor_moving_state()
+    if type(state) ~= "number" then clear_sequence(); previous = 0; wait_release = true; return end
+    local now = time_global()
+    if last_time and now < last_time then reset() end
+    last_time = now
+    update_trace(actor, now)
+    local l, r = hasbit(state,4), hasbit(state,8)
+    local current = l and r and 3 or l and 1 or r and 2 or 0
+    local old = previous
+    previous = current
+    -- После срабатывания и после блокировки нужно отпустить обе клавиши.
+    if wait_release then
+        if current == 0 and (not last_trigger or now - last_trigger >= cooldown) then wait_release = false end
+        return
+    end
+    if current == 3 then clear_sequence(); return end
+    if (phase == 1 or phase == 2) and now - first_at > max_interval then clear_sequence() end
+    if phase == 0 then
+        if current == 1 and old == 0 then
+            direction, first_at, phase = current, now, 1
+        end
+    elseif phase == 1 then
+        if current == 0 then
+            local duration = now - first_at
+            if duration >= min_first_hold and duration <= max_first_hold then
+                phase, released_at = 2, now
+            else clear_sequence() end
+        elseif current ~= direction or now - first_at > max_first_hold then
+            clear_sequence()
+        end
+    elseif phase == 2 then
+        if current ~= 0 then
+            if current == direction and old == 0 and now - released_at >= min_release
+                and now - first_at >= min_interval and now - first_at <= max_interval then
+                phase, second_at = 3, now
+            else clear_sequence() end
+        end
+    elseif phase == 3 then
+        if current ~= direction then clear_sequence()
+        elseif now - second_at >= second_confirm then
+            start_dodge(actor, now, state)
+        end
+    end
+end
+function update(actor)
+    local ok, err = pcall(step, actor)
+    if not ok then
+        disabled = true
+        notify(actor, "IMPULSE ERROR: " .. tostring(err), 10000)
+        pcall(function() printf("[grm_dodge_test] disabled: %s", tostring(err)) end)
+    end
+end

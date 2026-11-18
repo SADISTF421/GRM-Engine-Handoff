@@ -1,0 +1,22 @@
+#include "r1_common.h"
+
+struct vf
+{
+	float4 hpos	: POSITION;
+	float2 tc0	: TEXCOORD0;
+	float2 tc1	: TEXCOORD1;
+	float3 c0	: COLOR0;
+};
+
+vf main (v_lmap v)
+{
+	vf 		o;
+
+	
+	o.hpos 		= mul			(m_VP, v.pos);	// xform, input in world coords
+	o.tc0		= unpack_tc_base	(v.tc0);	// copy tc 
+	o.tc1		= o.tc0;				// copy tc 
+	o.c0		= L_ambient;				// just ambient
+
+	return o;
+}

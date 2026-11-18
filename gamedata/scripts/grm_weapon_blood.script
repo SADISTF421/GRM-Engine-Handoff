@@ -1,0 +1,197 @@
+-- Экранная имитация крови: пятна не привязаны к поверхности модели.
+local DURATION_MS = 120000
+local FADE_OUT_MS = 15000
+local FADE_IN_MS = 650
+local MAX_WEAPONS = 40
+local entries = {}
+local queued = nil
+local overlay, holder = nil, nil
+local shown_id, shown_stage, shown_level = nil, nil, nil
+local shown_since = nil
+local installed_hook = nil
+local failure_reported = false
+
+local function hide_overlay()
+    if overlay then
+        pcall(function() overlay:Show(false) end)
+        if holder then pcall(function() holder:RemoveDialogToRender(overlay) end) end
+    end
+    overlay, holder = nil, nil
+    shown_id, shown_stage, shown_level, shown_since = nil, nil, nil, nil
+end
+
+local function section_hash(s)
+    local h = 1
+    for i = 1, #s do h = (h * 131 + string.byte(s, i)) % 1000003 end
+    return h
+end
+
+local function weapon(actor)
+    if not actor then return nil end
+    local ok, id, section = pcall(function()
+        local w = actor:active_item()
+        if not w then return nil end
+        return tonumber(w:id()), w:section()
+    end)
+    if not ok or not id or id < 0 or id >= 65535 or type(section) ~= "string" then return nil end
+    if string.sub(section, 1, 4) ~= "wpn_" then return nil end
+    return math.floor(id), section_hash(section)
+end
+
+local function restore(actor)
+    if not queued then return end
+    if not actor or not actor:alive() then return end
+    local saved = queued
+    queued = nil
+    entries = {}
+    local now = time_global()
+    local n = 0
+    for key, count in pairs(saved) do
+        local id = string.match(key, "^w(%d+)$")
+        if id and n < MAX_WEAPONS then
+            local left = tonumber(saved["t" .. id]) or 0
+            local hash = tonumber(saved["h" .. id])
+            count = tonumber(count) or 0
+            if left > 0 and hash and count >= 1 then
+                id = tonumber(id)
+                if id and id >= 0 and id < 65535 then
+                    entries[id] = { count = math.min(3, math.floor(count)),
+                        until_time = now + math.min(DURATION_MS, left), hash = hash }
+                    n = n + 1
+                end
+            end
+        end
+    end
+end
+
+local function on_kill()
+    local actor = db and db.actor
+    if not actor or not actor:alive() then return end
+    restore(actor)
+    -- Движок здесь сообщает убийцу, но не подтверждает оружие выстрела.
+    local id, hash = weapon(actor)
+    if not id then
+        pcall(function() printf("[GRM_WEAPON_BLOOD] Нет подходящего активного оружия") end)
+        return
+    end
+    local now = time_global()
+    local e = entries[id]
+    if not e or e.hash ~= hash or now >= e.until_time then
+        e = { count = 0, hash = hash }
+        entries[id] = e
+    end
+    e.count = math.min(3, e.count + 1)
+    e.until_time = now + DURATION_MS
+    pcall(function() printf("[GRM_WEAPON_BLOOD] Оружие %s, пятна: %s", tostring(id), tostring(e.count)) end)
+end
+
+local function install_hook()
+    if installed_hook then return end
+    if not shiza_kill_stress or type(shiza_kill_stress.on_human_kill) ~= "function" then return end
+    local previous = shiza_kill_stress.on_human_kill
+    local wrapper = function(...)
+        pcall(on_kill)
+        return previous(...)
+    end
+    shiza_kill_stress.on_human_kill = wrapper
+    installed_hook = wrapper
+    pcall(function() printf("[GRM_WEAPON_BLOOD] Счётчик подключён") end)
+end
+
+local function texture(stage, level)
+    return "ui\\grm_weapon_blood\\blood_" .. tostring(stage) .. "_" .. tostring(level)
+end
+
+local function create_overlay(stage, level)
+    local wnd = CUIStatic()
+    wnd:Init(0, 0, 1024, 768)
+    wnd:SetStretchTexture(true)
+    wnd:InitTexture(texture(stage, level))
+    local hud = get_hud()
+    if not hud then return false end
+    overlay, holder = wnd, hud
+    hud:AddDialogToRender(wnd)
+    return true
+end
+
+local function tick(actor)
+    install_hook()
+    if not actor or not actor:alive() then
+        entries = {}; queued = nil; hide_overlay(); return
+    end
+    restore(actor)
+    local now = time_global()
+    for id, e in pairs(entries) do
+        if now >= e.until_time or e.until_time - now > DURATION_MS then entries[id] = nil end
+    end
+    local ready = app_ready() and device().precache_frame <= 0
+    local receiving = false
+    pcall(function() receiving = not not level.main_input_receiver() end)
+    if not ready or receiving then hide_overlay(); return end
+    local id, hash = weapon(actor)
+    local e = id and entries[id] or nil
+    if not e or e.hash ~= hash then hide_overlay(); return end
+    if shown_id ~= id then
+        hide_overlay()
+        shown_id = id
+        shown_since = now
+    end
+    local fade_in = math.max(0, math.min(1, (now - (shown_since or now)) / FADE_IN_MS))
+    local fade_out = math.max(0, math.min(1, (e.until_time - now) / FADE_OUT_MS))
+    local level = math.floor(8 * math.min(fade_in, fade_out) + 0.5)
+    -- Прозрачность хранится в текстурах: SetTextureColor в этой сборке отсутствует.
+    if level < 1 then
+        if overlay then overlay:Show(false) end
+        return
+    end
+    if not overlay then
+        if not create_overlay(e.count, level) then hide_overlay(); return end
+        shown_stage, shown_level = e.count, level
+    elseif shown_stage ~= e.count or shown_level ~= level then
+        overlay:InitTexture(texture(e.count, level))
+        shown_stage, shown_level = e.count, level
+    end
+    overlay:Show(true)
+end
+
+function update(actor)
+    local ok, err = pcall(tick, actor)
+    if not ok then
+        hide_overlay()
+        if not failure_reported then
+            failure_reported = true
+            pcall(function() printf("[GRM_WEAPON_BLOOD] Ошибка: %s", tostring(err)) end)
+        end
+    end
+end
+
+function reset()
+    hide_overlay()
+    entries, queued = {}, nil
+end
+
+function save_state(actor)
+    if not actor then return end
+    if queued then shiza_state.write(actor, "weapon_blood", queued); return end
+    local now = time_global()
+    local state, n = {}, 0
+    for id, e in pairs(entries) do
+        local left = e.until_time - now
+        if left > 0 and left <= DURATION_MS and n < MAX_WEAPONS then
+            local suffix = tostring(id)
+            state["w" .. suffix] = e.count
+            state["t" .. suffix] = left
+            state["h" .. suffix] = e.hash
+            n = n + 1
+        end
+    end
+    -- Непустой маркер позволяет отличить сохранённое пустое состояние.
+    state.version = 1
+    shiza_state.write(actor, "weapon_blood", state)
+end
+
+function queue_load_state(actor)
+    hide_overlay()
+    entries = {}
+    queued = shiza_state.read(actor, "weapon_blood")
+end

@@ -1,0 +1,24 @@
+--- /data/grm_transfer_stage/02_versions/r2_02_X5561_fix/gamedata/shaders/r2/grm_near_focus_test.h
++++ /data/grm_transfer_stage/02_versions/r2_03_visible/gamedata/shaders/r2/grm_near_focus_test.h
+@@ -6,10 +6,10 @@
+ {
+     float2 focus_uv = uv * 0.0001f + float2(0.49995f, 0.49995f);
+     float focus = tex2D(s_position, focus_uv).z;
+-    float activation = smoothstep(0.15f, 0.30f, focus) * (1.0f - smoothstep(0.65f, 1.25f, focus));
+-    float far_mask = smoothstep(focus + 0.30f, focus + 1.60f, position_eye.z);
++    float activation = smoothstep(0.15f, 0.30f, focus) * (1.0f - smoothstep(1.20f, 2.00f, focus));
++    float far_mask = smoothstep(focus + 0.30f, focus + 1.20f, position_eye.z);
+     float2 pixel = max(float2(abs(ddx(uv.x)), abs(ddy(uv.y))), float2(0.000001f, 0.000001f));
+-    float2 delta = pixel * 2.0f;
++    float2 delta = pixel * 4.0f;
+     float2 bound_lo = pixel * 0.5f;
+     float2 bound_hi = 1.0f - bound_lo;
+     float2 p0 = clamp(image_uv + float2(-delta.x, 0.0f), bound_lo, bound_hi);
+@@ -26,6 +26,6 @@
+     half w3 = (half)smoothstep(focus + 0.18f, focus + 0.55f, d3);
+     half weight = w0+w1+w2+w3;
+     half3 blur = (tex2D(s_image,p0).rgb*w0 + tex2D(s_image,p1).rgb*w1 + tex2D(s_image,p2).rgb*w2 + tex2D(s_image,p3).rgb*w3) / max(weight,0.001h);
+-    return lerp(scene, blur, (half)(0.30f * activation * far_mask * step(0.01f,weight)));
++    return lerp(scene, blur, (half)(0.55f * activation * far_mask * step(0.01f,weight)));
+ }
+ #endif

@@ -1,0 +1,630 @@
+ 
+ 
+local function same_actor(a,b)
+    return a and b and a:id()==b:id()
+end
+ 
+local HUD_SLOT = 4
+local RETURN_SLOT = 2
+local USE_CAMERA_ID = 6767
+local WAIT_TIMEOUT = 5000
+local generation = 0
+local current_use = nil
+local pending_journal = nil
+local sounds_tbl = {}
+ 
+ 
+local INJECT_SOUND_DELAY_MS = 2367
+local sound_start_delays = {
+     
+    shiza_cigarette_pack = 2200,
+    medkit = INJECT_SOUND_DELAY_MS,
+    medkit_army = INJECT_SOUND_DELAY_MS,
+    medkit_scientic = INJECT_SOUND_DELAY_MS
+}
+
+local function on_use_pills(section)
+    shiza_radiation.on_actor_use(nil, section)
+end
+local function on_use_syringe(section)
+    shiza_syringe.on_injection_completed(section)
+end
+local function on_use_vodka(section)
+    shiza_vodka.on_actor_use(nil, section)
+end
+
+ 
+local function on_use_cigarette_pack(section)
+    shiza_radiation.on_cigarette_pack_finished()
+end
+local function is_cigarette(section)
+    return section=="sigi" or section=="shiza_cigarette_pack"
+end
+
+ 
+local cig_stub = {reset=function() end, start=function() return nil end,
+    update=function() end, finish=function() end}
+function cig_fx()
+    local m = shiza_cigarette_fx
+    if m and m.reset and m.start and m.update and m.finish then return m end
+    return cig_stub
+end
+
+ 
+local USE_COOLDOWN_MS = 900
+ 
+local SLOT_LOST_GRACE_MS = 300
+ 
+local LATE_FINISH_FRACTION = 0.85
+local busy_until = 0
+local busy_tip_at = 0
+
+local function notify_stress_relief(section)
+    local ok, err = pcall(function()
+        if shiza_kill_stress and shiza_kill_stress.on_relief_item then
+            shiza_kill_stress.on_relief_item(section)
+        end
+    end)
+    if not ok then printf("[HUD_ITEMS] stress relief failed for %s: %s", tostring(section), tostring(err)) end
+end
+
+local available_sections = {
+     
+    energy_drink = {"energy_drink_animator", nil, 5200, "energy_drink_usable"},
+    sigi = {"sigi_animator", "hud_items\\hud_siga", 37500, "sigi_usable"},
+    shiza_cigarette_pack = {"sigi_animator", "hud_items\\ciga1", 37500, "sigi_usable", on_use_cigarette_pack},
+    antirad = {"antirad_animator", "hud_items\\hud_siga", 2533, "antirad_usable", on_use_pills, "camera_effects\\tabletki_use.anm"},
+    vodka = {"vodka_animator", "hud_items\\inv_vodka", 6767, "vodka_usable", on_use_vodka, "camera_effects\\vodka_use.anm"},
+    meatreznya = {"meat_animator", "hud_items\\hud_siga", 2570, "meat_usable", nil, "camera_effects\\myso_use.anm"},
+    bandage = {"bandage_animator", "hud_items\\badndage_use", 2633, "bint_usable", nil, "camera_effects\\bint_use.anm"},
+    medkit = {"medkit_animator", "hud_items\\syringe_inject", 4100, "medkit_usable", on_use_syringe, "camera_effects\\narktoa.anm"},
+     
+    medkit_army = {"medkit_animator", "hud_items\\syringe_inject", 4100, "medkit_usable", on_use_syringe, "camera_effects\\narktoa.anm"},
+    medkit_scientic = {"medkit_animator", "hud_items\\syringe_inject", 4100, "medkit_usable", on_use_syringe, "camera_effects\\narktoa.anm"}
+}
+
+ 
+ 
+local source_order={"energy_drink","sigi","antirad","vodka","meatreznya","bandage","medkit","medkit_army","medkit_scientic","shiza_cigarette_pack"}
+local source_codes={}
+for i,name in ipairs(source_order) do source_codes[name]=i end
+local function owned_item(section,id)
+    local actor=db.actor
+    if not actor then return nil end
+    local first=actor:object(section)
+    if not id or (first and first:id()==id) then return first end
+    local found=nil
+    actor:iterate_inventory(function(owner,item)
+        if item:section()==section and item:id()==id then found=item end
+    end,actor)
+    return found
+end
+
+function spawn(section)
+    local actor = db.actor
+    if actor then
+        return alife():create(section, actor:position(), actor:level_vertex_id(), actor:game_vertex_id(), actor:id())
+    end
+end
+function destroy_actor_item(section,id)
+    if not db.actor then return end
+    local obj=owned_item(section,id)
+    local server_obj=obj and alife():object(obj:id()) or nil
+    if not server_obj and id then
+         
+         
+        local candidate=alife():object(id)
+        if candidate then
+            local ok,owned=pcall(function()
+                return candidate.parent_id==db.actor:id() and candidate:section_name()==section
+            end)
+            if ok and owned then server_obj=candidate end
+        end
+    end
+    if server_obj then alife():release(server_obj,true) end
+end
+
+ 
+local function destroy_state_animator(state)
+    local id=state.animator_id
+    if not id then return end
+    if owned_item(state.params[1],id) then
+        destroy_actor_item(state.params[1],id)
+        return
+    end
+    local sim=alife()
+    local obj=sim and sim:object(id) or nil
+    if not obj or not state.animator_name then return end
+    local ok,owned=pcall(function()
+        local parent=obj.parent_id
+        return obj:section_name()==state.params[1] and obj:name()==state.animator_name
+            and (parent==state.actor:id() or parent==65535 or parent==-1)
+    end)
+     
+    if ok and owned then sim:release(obj,true) end
+end
+
+function tip(text)
+    if db.actor then
+        db.actor:give_game_news(text, "ui\\ui_iconsTotal", Frect():set(83,470,83,47), 0, 5000)
+    end
+end
+function always() return true end
+function need_knife()
+    if db.actor and db.actor:object("wpn_knife") then return true end
+    tip("Для использования этого предмета необходимо наличие ножа")
+    return false
+end
+local function death_scene()
+    return shiza_radiation.is_death_started() or shiza_vodka.is_death_started()
+end
+ 
+local function apply_death_weapon_policy(actor)
+    if shiza_radiation.should_hide_weapon() or shiza_vodka.should_hide_weapon() then
+        actor:hide_weapon()
+    else
+        actor:restore_weapon()
+    end
+end
+local function return_weapon(actor)
+    if not actor or not actor:alive() then return end
+    if death_scene() then
+        apply_death_weapon_policy(actor)
+        return
+    end
+     
+     
+    actor:restore_weapon()
+    if actor:item_in_slot(RETURN_SLOT) then
+        actor:activate_slot(RETURN_SLOT)
+    end
+end
+local function stop_use_sound(state)
+    if state.sound and state.sound:playing() then state.sound:stop() end
+end
+local function cleanup(state, completed)
+    if is_cigarette(state.source) and not completed then cig_fx().reset() end
+    stop_use_sound(state)
+     
+     
+    if not state.actor:alive() then return end
+    destroy_state_animator(state)
+    if state.had_binoculars and not db.actor:object("wpn_binoc") then spawn("wpn_binoc") end
+end
+function reset()
+    cig_fx().reset()
+    generation = generation + 1
+    if current_use then stop_use_sound(current_use) end
+    current_use = nil
+    pending_journal = nil
+    sounds_tbl = {}
+    busy_until = 0
+    level.remove_cam_effector(USE_CAMERA_ID)
+end
+function on_first_update()
+     
+    local light=shiza_lighter_light; if light and light.recover then light.recover(db.actor) end
+    shiza_syringe.start_test()
+    local saved=pending_journal or shiza_state.read(db.actor,"hud")
+    pending_journal=nil
+    if saved and saved.active==1 then
+        local code=math.floor(shiza_state.number(saved,"source",0,0,#source_order))
+        local section=source_order[code]
+        if section then
+            local p=available_sections[section]
+            if saved.animator and saved.animator>0 then destroy_actor_item(p[1],saved.animator) end
+            if saved.proxy and saved.proxy>0 then destroy_actor_item(p[4],saved.proxy) end
+            if saved.phase and saved.phase<4 then spawn(section) end
+            if saved.binoculars==1 and not owned_item("wpn_binoc") then spawn("wpn_binoc") end
+        end
+        shiza_state.write(db.actor,"hud",{active=0})
+        return
+    end
+     
+    local item = db.actor:item_in_slot(HUD_SLOT)
+    if item then
+        local section = item:section()
+        if section == "bread_animator" then
+            destroy_actor_item(section)
+            spawn("meatreznya")
+        else
+            for _,source in ipairs(source_order) do
+                local p=available_sections[source]
+                if section == p[1] then
+                    destroy_actor_item(section)
+                    spawn(source)
+                    break
+                end
+            end
+        end
+    end
+end
+function on_actor_use(obj)
+    if not db.actor or not db.actor:alive() or not obj then return end
+    local section = obj:section()
+     
+    if section == "meat_usable" or section == "reznya_trup_meat" then
+        shiza_radiation.on_meat_eaten(section)
+        return
+    end
+    local p = available_sections[section]
+    if not p then return end
+     
+     
+    if not shiza_syringe.can_use(section) then
+        spawn(section)
+        return
+    end
+    local actor = db.actor
+     
+     
+    local now = time_global()
+    if current_use or death_scene() or now < busy_until then
+        spawn(section)
+        if now >= busy_tip_at then
+            busy_tip_at = now + 2000
+            tip("Руки заняты")
+        end
+        return
+    end
+    local slot_item = actor:item_in_slot(HUD_SLOT)
+    if slot_item and slot_item:section() ~= "wpn_binoc" then
+        spawn(section)
+        return
+    end
+    if is_cigarette(section) then cig_fx().reset() end
+    local state = {params=p, actor=actor, token=generation,source=section,phase=1,
+        had_binoculars=slot_item ~= nil, deadline=time_global()+WAIT_TIMEOUT}
+    current_use = state
+    local function valid()
+        return state.token == generation and same_actor(db.actor,actor) and current_use == state
+    end
+    local function abort(refund)
+        if state.finished or state.abort_pending then return end
+         
+        if level.main_input_receiver() then
+            state.abort_pending=true
+            stop_use_sound(state)
+            if is_cigarette(section) then cig_fx().reset() end
+            level.add_call(
+                function() return not valid() or level.main_input_receiver()==nil end,
+                function()
+                    if not valid() then return end
+                    state.abort_pending=nil
+                    abort(refund)
+                end)
+            return
+        end
+        state.finished=true
+         
+        if current_use==state then current_use=nil end
+        cleanup(state)
+        if state.proxy_id then destroy_actor_item(p[4],state.proxy_id) end
+        level.remove_cam_effector(USE_CAMERA_ID)
+        if refund and state.phase ~= 4 and actor:alive() then spawn(section) end
+        return_weapon(actor)
+        busy_until = time_global() + USE_COOLDOWN_MS
+    end
+    local wnd = level.main_input_receiver()
+    if wnd then level.start_stop_menu(wnd, true) end
+    if state.had_binoculars then destroy_actor_item("wpn_binoc") end
+    local animator=spawn(p[1])
+    if not animator then abort(true);return end
+     
+    state.animator_id=animator.id
+    local named,name=pcall(function() return animator:name() end)
+    state.animator_name=named and type(name)=="string" and name~="" and name or nil
+    actor:restore_weapon()
+    actor:activate_slot(HUD_SLOT)
+    level.add_call(
+        function()
+            if not valid() or not actor:alive() or death_scene() then return true end
+            local active = actor:active_item()
+            if actor:active_slot() == HUD_SLOT and active and active:id()==state.animator_id and active:section() == p[1] then return true end
+            actor:activate_slot(HUD_SLOT)
+            return time_global() >= state.deadline
+        end,
+        function()
+            if not valid() then return end
+            local active = actor:active_item()
+            if not actor:alive() or death_scene() then abort(true); return end
+            if actor:active_slot() ~= HUD_SLOT or not active or active:id()~=state.animator_id or active:section() ~= p[1] then abort(true); return end
+             
+            if p[2] then
+                if not sounds_tbl[p[2]] then sounds_tbl[p[2]] = xr_sound.get_safe_sound_object(p[2]) end
+                state.sound = sounds_tbl[p[2]]
+            end
+             
+            state.phase=2
+            local animation_start = time_global()
+            if is_cigarette(section) then
+                state.cigarette_fx=cig_fx().start(animation_start)
+            end
+            local animation_end = animation_start + p[3]
+            state.deadline = animation_end
+
+            -- Red medkit only: commit once at frame 83 of vanyatiba (30 fps).
+            -- Keep the animator until the normal end; phase 4 prevents a refund
+            -- after healing, including save/reload and interruption.
+            local function finish_red_after_injection()
+                if not valid() then return end
+                if not actor:alive() or death_scene() then abort(false); return end
+                if level.main_input_receiver() then
+                    state.cleanup_deferred = true
+                    stop_use_sound(state)
+                    level.add_call(
+                        function() return not valid() or not actor:alive() or death_scene()
+                            or level.main_input_receiver()==nil end,
+                        function()
+                            if not valid() then return end
+                            if not actor:alive() or death_scene() then abort(false); return end
+                            cleanup(state, true)
+                            actor:hide_weapon()
+                            current_use = nil
+                            busy_until = time_global() + USE_COOLDOWN_MS
+                            return_weapon(actor)
+                        end)
+                    return
+                end
+                cleanup(state, true)
+                actor:hide_weapon()
+                current_use = nil
+                busy_until = time_global() + USE_COOLDOWN_MS
+                return_weapon(actor)
+            end
+            if section == "medkit" then
+                local injection_at = animation_start + 2767
+                level.add_call(
+                    function()
+                        return not valid() or not actor:alive() or death_scene()
+                            or time_global() >= injection_at
+                    end,
+                    function()
+                        if not valid() or not actor:alive() or death_scene() then return end
+                        local slot = actor:item_in_slot(HUD_SLOT)
+                        if state.abort_pending or state.interrupted or actor:active_slot() ~= HUD_SLOT or not slot
+                            or slot:id() ~= state.animator_id
+                            or not owned_item(p[1], state.animator_id)
+                            or not shiza_syringe.can_use(section) then return end
+                        state.phase = 3
+                        local proxy = spawn(p[4])
+                        state.proxy_id = proxy and proxy.id or nil
+                        if not state.proxy_id then abort(true); return end
+                        local proxy_deadline = time_global() + WAIT_TIMEOUT
+                        state.deadline = proxy_deadline
+                        level.add_call(
+                            function()
+                                return not valid() or not actor:alive() or death_scene()
+                                    or owned_item(p[4], state.proxy_id) ~= nil
+                                    or time_global() >= proxy_deadline
+                            end,
+                            function()
+                                if not valid() or state.abort_pending then return end
+                                local usable = state.proxy_id and owned_item(p[4], state.proxy_id) or nil
+                                if not actor:alive() or death_scene() or not usable then abort(true); return end
+                                -- Mark committed before the engine callback can save or interrupt.
+                                state.phase = 4
+                                actor:eat(usable)
+                                state.applied = true
+                                if p[5] then
+                                    local ok, err = pcall(p[5], section)
+                                    if not ok then printf("[HUD_ITEMS] post-use callback failed for %s: %s", tostring(section), tostring(err)) end
+                                end
+                                notify_stress_relief(section)
+                                if state.animation_ended and valid() then finish_red_after_injection() end
+                            end)
+                    end)
+            end
+            local function play_use_sound()
+                if valid() and not state.abort_pending and actor:alive() and not death_scene()
+                    and time_global() < animation_end and state.sound then
+                    state.sound:play_at_pos(actor, vector():set(0,0,0), 0, sound_object.s2d)
+                end
+            end
+            local sound_delay = sound_start_delays[section] or 0
+            if sound_delay > 0 then
+                local sound_at = animation_start + sound_delay
+                level.add_call(
+                    function()
+                        return not valid() or not actor:alive() or death_scene()
+                            or time_global() >= sound_at
+                    end,
+                    play_use_sound)
+            else
+                play_use_sound()
+            end
+            if p[6] then level.add_cam_effector(p[6], USE_CAMERA_ID, false, "") end
+            level.add_call(
+                function()
+                     
+                     
+                    if valid() and actor:alive() and not death_scene() then
+                        local in_slot=actor:item_in_slot(HUD_SLOT)
+                        if not owned_item(p[1],state.animator_id)
+                            or not in_slot or in_slot:id()~=state.animator_id then return true end
+                    end
+                     
+                     
+                     
+                    if valid() and actor:alive() and not death_scene() then
+                        local t = time_global()
+                        if actor:active_slot() ~= HUD_SLOT then
+                            state.slot_lost_at = state.slot_lost_at or t
+                            if t - state.slot_lost_at >= SLOT_LOST_GRACE_MS then
+                                state.interrupted = true
+                                return true
+                            end
+                        else
+                            state.slot_lost_at = nil
+                        end
+                    end
+                    if valid() and actor:alive() and not death_scene()
+                        and time_global()<animation_end then
+                        cig_fx().update(state.cigarette_fx,time_global())
+                    end
+                    return not valid() or not actor:alive() or death_scene()
+                        or time_global() >= animation_end
+                end,
+                function()
+                    if not valid() then return end
+                    if not actor:alive() or death_scene() then abort(true); return end
+                    if section == "medkit" and state.applied then
+                        state.animation_ended = true
+                        finish_red_after_injection()
+                        return
+                    end
+                    if state.interrupted then
+                        local played = time_global() - animation_start
+                        if played < p[3] * LATE_FINISH_FRACTION then
+                             
+                            abort(true)
+                            return
+                        end
+                    end
+                    local in_slot=actor:item_in_slot(HUD_SLOT)
+                    if not owned_item(p[1],state.animator_id)
+                        or not in_slot or in_slot:id()~=state.animator_id then abort(true); return end
+                    if not shiza_syringe.can_use(section) then abort(true); return end
+                    if section == "medkit" and state.phase == 3 then
+                        state.animation_ended = true
+                        return
+                    end
+                     
+                     
+                    if level.main_input_receiver() then
+                        state.cleanup_deferred = true
+                        stop_use_sound(state)
+                    else
+                        cleanup(state, true)
+                        actor:hide_weapon()
+                    end
+                    if is_cigarette(section) then cig_fx().finish(state.cigarette_fx) end
+                    state.phase=3
+                    local proxy=spawn(p[4])
+                    state.proxy_id=proxy and proxy.id or nil
+                    state.deadline = time_global() + WAIT_TIMEOUT
+                    level.add_call(
+                        function()
+                            return not valid() or not actor:alive() or death_scene()
+                                or (state.proxy_id and owned_item(p[4],state.proxy_id)) ~= nil or time_global() >= state.deadline
+                        end,
+                        function()
+                            if not valid() then return end
+                            local usable = state.proxy_id and owned_item(p[4],state.proxy_id) or nil
+                            if not actor:alive() or death_scene() or not usable then
+                                abort(true)
+                                return
+                            end
+                            state.phase=4
+                            actor:eat(usable)
+                            if section=="shiza_cigarette_pack" and not level.main_input_receiver() then
+                                destroy_actor_item(p[4],state.proxy_id)
+                                state.proxy_id = nil
+                            end
+                            if not state.cleanup_deferred and not level.main_input_receiver() then
+                                current_use = nil
+                            end
+                            if p[5] then
+                                local callback_ok, callback_err = pcall(p[5], section)
+                                if not callback_ok then
+                                    printf("[HUD_ITEMS] post-use callback failed for %s: %s", tostring(section), tostring(callback_err))
+                                end
+                            end
+                            notify_stress_relief(section)
+                            if not valid() then
+                                if current_use == nil then
+                                    busy_until = time_global() + USE_COOLDOWN_MS
+                                    return_weapon(actor)
+                                end
+                                return
+                            end
+                            if level.main_input_receiver() then
+                                level.add_call(
+                                    function() return not valid() or level.main_input_receiver()==nil end,
+                                    function()
+                                        if not valid() then return end
+                                        if state.cleanup_deferred then cleanup(state, true) end
+                                        if section=="shiza_cigarette_pack" and state.proxy_id then
+                                            destroy_actor_item(p[4],state.proxy_id)
+                                        end
+                                        current_use = nil
+                                        busy_until = time_global() + USE_COOLDOWN_MS
+                                        return_weapon(actor)
+                                    end)
+                                return
+                            end
+                            if state.cleanup_deferred then cleanup(state, true) end
+                            if section=="shiza_cigarette_pack" and state.proxy_id then
+                                destroy_actor_item(p[4],state.proxy_id)
+                            end
+                            current_use = nil
+                            busy_until = time_global() + USE_COOLDOWN_MS
+                            return_weapon(actor)
+                        end)
+                end)
+        end)
+end
+
+function is_using_item() return current_use ~= nil end
+
+function update_weapon_policy()
+    local actor = db.actor
+    if not actor or not actor:alive() or death_scene() then
+        cig_fx().reset()
+    end
+    if not actor or not actor:alive() or current_use then return end
+     
+    if death_scene() then apply_death_weapon_policy(actor) end
+end
+
+
+function save_state(actor)
+    if pending_journal then
+        shiza_state.write(actor,"hud",pending_journal)
+        return
+    end
+    if current_use then
+        shiza_state.write(actor,"hud",{active=1,source=source_codes[current_use.source] or 0,
+            phase=current_use.phase or 1,animator=current_use.animator_id or 0,
+            proxy=current_use.proxy_id or 0,binoculars=current_use.had_binoculars and 1 or 0})
+    else
+        shiza_state.write(actor,"hud",{active=0})
+    end
+end
+
+
+function queue_load_state(actor)
+    pending_journal=shiza_state.read(actor,"hud")
+end
+
+
+function cancel_for_scene()
+    cig_fx().reset()
+     
+     
+    local state=current_use
+    generation=generation+1
+    current_use=nil
+    if state then
+        stop_use_sound(state)
+        if same_actor(db.actor,state.actor) and state.actor:alive() then
+            if (state.phase or 1)<4 then
+                cleanup(state)
+                if state.proxy_id then destroy_actor_item(state.params[4],state.proxy_id) end
+                spawn(state.source)
+            elseif state.cleanup_deferred or (state.source == "medkit" and state.phase == 4) then
+                level.add_call(
+                    function() return not same_actor(db.actor,state.actor) or level.main_input_receiver()==nil end,
+                    function()
+                        if same_actor(db.actor,state.actor) and state.actor:alive() then
+                            cleanup(state, true)
+                            if state.source=="shiza_cigarette_pack" and state.proxy_id then
+                                destroy_actor_item(state.params[4],state.proxy_id)
+                            end
+                        end
+                    end)
+            end
+        end
+    end
+    level.remove_cam_effector(USE_CAMERA_ID)
+end

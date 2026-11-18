@@ -1,0 +1,246 @@
+local MAX_EVENTS = 2
+local FIRST_MIN, FIRST_MAX = 90000, 180000
+local NEXT_MIN, NEXT_MAX = 240000, 480000
+local RETRY_MS = 90000
+local RANGE2 = 30 * 30
+local MAX_LAMPS = 40
+local SCAN_BATCH, SCAN_DELAY, MAX_ID = 128, 50, 65534
+local SCAN_LEAD_MS = 35000
+local state = nil
+
+local function location()
+    local ok, value = pcall(function() return string.lower(level.name()) end)
+    return ok and value or nil
+end
+local LOCATIONS = {
+    l05_bar="bar", l05_bar_ai="bar",
+    l03u_agr_underground="agro", l03u_agr_underground_e3="agro",
+    l03u_agr_underground_hw="agro", l03u_agr_underground_oles="agro",
+    l03u_agroprom_ai="agro",
+    l04u_labx18="lab", l04u_labx18_ai="lab", l04u_labx18_oles="lab",
+    l08u_brainlab="lab", l08u_brainlab_ai="lab"
+}
+local function get_client(id)
+    local ok, object = pcall(function() return level.object_by_id(id) end)
+    return ok and object or nil
+end
+local function lamp_section(s, section)
+    if section == "shiza_cigarette_light_test" then return false end
+    if s.classes[section] ~= nil then return s.classes[section] end
+    local ok, class_name = pcall(function()
+        local ini = system_ini()
+        if not ini:section_exist(section) or not ini:line_exist(section,"class") then return "" end
+        return ini:r_string(section,"class")
+    end)
+    local is_lamp = ok and type(class_name)=="string" and string.upper(class_name):gsub("%s+","")=="O_HLAMP"
+    s.classes[section] = is_lamp == true
+    return s.classes[section]
+end
+local function identity(obj)
+    local ok, id, section, name = pcall(function() return obj:id(),obj:section(),obj:name() end)
+    if not ok or type(id)~="number" or type(section)~="string" or type(name)~="string" then return nil end
+    return {id=id,section=section,name=name}
+end
+local function eligible(s,obj)
+    local item=identity(obj)
+    if not item or not lamp_section(s,item.section) then return nil end
+    -- Extra fail-closed protection in the new underground locations.
+    -- An unavailable story_id means we do not change that lamp.
+    if s.mode ~= "bar" then
+        local ok, safe=pcall(function()
+            local sid=obj:story_id()
+            return type(sid)=="number" and (sid==-1 or sid==4294967295 or sid==4294967296)
+        end)
+        if not ok or not safe then return nil end
+    end
+    -- Skip lamps with level-script logic: their on/off state may belong to a scene.
+    local ok, scripted = pcall(function()
+        local ini=obj:spawn_ini()
+        return ini ~= nil and ini:section_exist("logic")
+    end)
+    if not ok or scripted then return nil end
+    local near_ok, dist2 = pcall(function()
+        local p, a = obj:position(), db.actor:position()
+        local x,y,z=p.x-a.x,p.y-a.y,p.z-a.z
+        return x*x+y*y+z*z
+    end)
+    if not near_ok or dist2>RANGE2 then return nil end
+    return item
+end
+local function same_object(item)
+    local obj=get_client(item.id)
+    if not obj then return nil end
+    local current=identity(obj)
+    if current and current.section==item.section and current.name==item.name then return obj end
+    return nil
+end
+local function restore(s)
+    if not s or not s.off then return end
+    local off=s.off
+    s.off=nil
+    for _,item in ipairs(off) do
+        local obj=same_object(item)
+        if obj then pcall(function() obj:get_hanging_lamp():turn_on() end) end
+    end
+end
+-- Called before saving: never intentionally save during the short off phase.
+function before_save()
+    if state then restore(state); state.phase=nil; state.sequence=nil; state.cursor=0; state.scan_complete=false; state.known={} end
+end
+function reset()
+    restore(state)
+    state=nil
+end
+local function blocked()
+    local ok, result = pcall(function()
+        if not db.actor:alive() or db.actor:is_talking() or db.actor:has_info("disabled_ui") then return true end
+        if game and type(game.has_active_tutorial)=="function" and game.has_active_tutorial() then return true end
+        if shiza_hud_items and type(shiza_hud_items.is_using_item)=="function" and shiza_hud_items.is_using_item() then return true end
+        if shiza_radiation and type(shiza_radiation.is_death_started)=="function" and shiza_radiation.is_death_started() then return true end
+        if shiza_vodka and type(shiza_vodka.is_death_started)=="function" and shiza_vodka.is_death_started() then return true end
+        return false
+    end)
+    return not ok or result
+end
+local function scan_step(s,now)
+    if s.scan_complete or now<s.scan_at then return end
+    s.scan_at=now+SCAN_DELAY
+    local last=math.min(s.cursor+SCAN_BATCH-1,MAX_ID)
+    for id=s.cursor,last do
+        local obj=get_client(id)
+        if obj then
+            local ok,section=pcall(function() return obj:section() end)
+            if ok and type(section)=="string" and lamp_section(s,section) then s.known[id]=true end
+        end
+    end
+    s.cursor=last+1
+    if s.cursor>MAX_ID then s.scan_complete=true end
+end
+-- SOS is encoded as darkness: ... --- ...
+local SEQUENCES = {
+    {
+        {fraction=1, duration=120, gap=120},
+        {fraction=1, duration=120, gap=120},
+        {fraction=1, duration=120, gap=360},
+        {fraction=1, duration=360, gap=120},
+        {fraction=1, duration=360, gap=120},
+        {fraction=1, duration=360, gap=360},
+        {fraction=1, duration=120, gap=120},
+        {fraction=1, duration=120, gap=120},
+        {fraction=1, duration=120, gap=0}
+    }
+}
+local ATMOS_SEQUENCES = {
+    {
+        {fraction=0.50, duration=320, gap=100},
+        {fraction=1.00, duration=90,  gap=150},
+        {fraction=1.00, duration=130, gap=120},
+        {fraction=0.50, duration=220, gap=0}
+    },
+    {
+        {fraction=0.65, duration=260, gap=110},
+        {fraction=1.00, duration=80,  gap=80},
+        {fraction=1.00, duration=70,  gap=180},
+        {fraction=1.00, duration=180, gap=0}
+    }
+}
+
+local function start_off(s,now,step)
+    local candidates={}
+    for id in pairs(s.known) do
+        local obj=get_client(id)
+        if not obj then s.known[id]=nil
+        else
+            local item=eligible(s,obj)
+            if item then candidates[#candidates+1]=item end
+        end
+    end
+    if #candidates==0 then return false end
+    table.sort(candidates,function(a,b) return a.id < b.id end)
+    -- Partial pulses vary their lamps; SOS uses the stable order.
+    if step.fraction < 1 then
+        for i=#candidates,2,-1 do
+            local j=math.random(1,i)
+            candidates[i],candidates[j]=candidates[j],candidates[i]
+        end
+    end
+    local target=math.min(MAX_LAMPS,math.max(1,math.ceil(#candidates*step.fraction)))
+    local off={}
+    for _,item in ipairs(candidates) do
+        local obj=same_object(item)
+        if obj then
+            local ok=pcall(function() obj:get_hanging_lamp():turn_off() end)
+            if ok then off[#off+1]=item end
+        end
+        if #off>=target then break end
+    end
+    if #off==0 then return false end
+    s.off=off
+    s.phase="off"
+    s.phase_until=now+step.duration
+    return true
+end
+local function new_state(now,actor_id,loc,mode)
+    local first_min,first_max=FIRST_MIN,FIRST_MAX
+    if mode~="bar" then first_min,first_max=60000,120000 end
+    return {actor_id=actor_id,loc=loc,mode=mode,cursor=0,scan_at=now,known={},classes={},
+        events=0,next_event=now+math.random(first_min,first_max),phase=nil,off=nil}
+end
+function update()
+    if not db or not db.actor then reset() return end
+    local now=time_global()
+    local loc=location()
+    local mode=LOCATIONS[loc]
+    if not mode then reset() return end
+    local ok,actor_id=pcall(function() return db.actor:id() end)
+    if not ok or not actor_id then reset() return end
+    if state and (state.actor_id~=actor_id or state.loc~=loc or now<state.last_time) then reset() end
+    if not state then state=new_state(now,actor_id,loc,mode) end
+    local s=state
+    s.last_time=now
+    -- Restore before any other action, including when a scene starts.
+    if s.phase=="off" then
+        local stop=blocked()
+        if now>=s.phase_until or stop then
+            restore(s)
+            local step=s.sequence[s.step_index]
+            if stop or s.step_index>=#s.sequence then
+                s.phase=nil; s.sequence=nil; s.cursor=0; s.scan_complete=false; s.known={}
+            else
+                s.phase="gap"; s.phase_until=now+step.gap
+            end
+        end
+        return
+    end
+    -- Idle frames do not scan the level or check other gameplay systems.
+    if not s.phase and (s.events>=MAX_EVENTS or now<s.next_event-SCAN_LEAD_MS) then return end
+    if blocked() then s.phase=nil; s.sequence=nil; s.cursor=0; s.scan_complete=false; s.known={}; return end
+    if s.phase=="gap" then
+        if now>=s.phase_until then
+            s.step_index=s.step_index+1
+            if not start_off(s,now,s.sequence[s.step_index]) then s.phase=nil; s.sequence=nil; s.cursor=0; s.scan_complete=false; s.known={} end
+        end
+        return
+    end
+    if s.events>=MAX_EVENTS then return end
+    scan_step(s,now)
+    if now<s.next_event or not s.scan_complete then return end
+    if s.mode=="bar" then
+        s.sequence=SEQUENCES[math.random(1,#SEQUENCES)]
+    elseif s.mode=="lab" and math.random(1,2)==1 then
+        s.sequence=SEQUENCES[1]
+    else
+        s.sequence=ATMOS_SEQUENCES[math.random(1,#ATMOS_SEQUENCES)]
+    end
+    s.step_index=1
+    if start_off(s,now,s.sequence[1]) then
+        s.events=s.events+1
+        local next_min,next_max=NEXT_MIN,NEXT_MAX
+        if s.mode~="bar" then next_min,next_max=60000,180000 end
+        s.next_event=now+math.random(next_min,next_max)
+    else
+        s.sequence=nil
+        s.next_event=now+RETRY_MS
+        s.cursor=0; s.scan_complete=false; s.known={}
+    end
+end

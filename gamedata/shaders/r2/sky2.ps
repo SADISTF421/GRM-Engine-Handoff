@@ -1,0 +1,79 @@
+#include "common.h"
+#include "f42_weather.h"
+
+struct         v2p
+{
+        half4        	factor:     COLOR0          ;        // for SM3 - factor.rgb - tonemap-prescaled
+        half3        	tc0:        TEXCOORD0       ;
+        half3        	tc1:        TEXCOORD1		;
+        float         f42_tm:     TEXCOORD2;
+};
+struct        _out
+{
+        half4        	low: 		COLOR0;
+        half4        	high:		COLOR1;
+};
+
+
+uniform samplerCUBE     s_sky0      : register(s0)	;
+uniform samplerCUBE     s_sky1      : register(s1)	;
+
+//////////////////////////////////////////////////////////////////////////////////////////
+// Pixel
+#if 1
+_out         main               ( v2p I )
+{
+        half3         	s0  	= texCUBE        (s_sky0,I.tc0);
+        half3         	s1      = texCUBE        (s_sky1,I.tc1);
+        half3        	sky     = I.factor*lerp  (s0,s1,I.factor.w);
+        // ћ€гко соедин€ю цвет неба с туманом около горизонта.
+        float grm_sky_len = max(length((float3)I.tc0), 0.0001f);
+        float grm_horizon = 1.0f - smoothstep(0.03f, 0.22f, abs((float)I.tc0.y) / grm_sky_len);
+        half grm_sky_fade = (half)(0.28f * grm_horizon) * f42_weather_active();
+        sky = lerp(sky, fog_color.rgb * ((half)I.f42_tm * 0.5h), grm_sky_fade);
+        // The Darkscape sky and distant geometry use the same gray fog radiance.
+        // sky2 uses 2*tonemap in non-VTF and pre-exposure in VTF, hence 0.5*f42_tm.
+        float grm_dark_alpha = 1.0f - smoothstep(0.015f, 0.040f, abs((float)L_hemi_color.w - 1.25f));
+        float grm_dark_g = max((float)fog_color.g, 0.001f);
+        float grm_dark_ratio = max(abs((float)fog_color.r / grm_dark_g - 0.98f),
+                                   abs((float)fog_color.b / grm_dark_g - 1.02f));
+        float grm_dark_far = (1.0f - fog_params.x) / max(fog_params.w, 0.00001f);
+        float grm_dark_range = smoothstep(40.0f, 48.0f, grm_dark_far) *
+                               (1.0f - smoothstep(62.0f, 70.0f, grm_dark_far));
+        float grm_dark_signature = (1.0f - smoothstep(0.008f, 0.020f, grm_dark_ratio)) * grm_dark_range;
+        half grm_dark_tag = (half)saturate(max(grm_dark_alpha, grm_dark_signature));
+        half grm_gray = dot(max(fog_color.rgb, 0.0h), half3(0.2126h, 0.7152h, 0.0722h));
+        half3 grm_haze_sky = half3(grm_gray, grm_gray, grm_gray) * (half)I.f42_tm * 0.5h;
+        sky = lerp(sky, grm_haze_sky, grm_dark_tag);
+
+        // Diagnostic: keep native cubemap colour; no custom fog/horizon blend.
+
+        // final tone-mapping
+        _out        	o;
+#ifdef        USE_VTF
+        o.low        	=		sky.xyzz		;
+        o.high        	=		o.low/def_hdr	;
+#else
+        half    scale   = tex2D(s_tonemap,half2(.5h,.5h)).x;
+        tonemap        	(o.low, o.high, sky, scale*2.0 );
+#endif
+        return        	o;
+}
+#else
+_out         main               ( v2p I )
+{
+        half3         	s0  	= texCUBE        (s_sky0,I.tc0);
+        half3         	s1      = texCUBE        (s_sky1,I.tc1);
+        half3        	sky     = I.factor*lerp  (s0,s1,I.factor.w);
+
+        // Diagnostic: keep native cubemap colour; no custom fog/horizon blend.
+
+        // final tone-mapping
+        _out        	o;
+        half    scale   = 1 + tex2D(s_tonemap,half2(.5h,.5h)).x;
+				sky		= sky*scale*2.0f		;
+        o.low        	= sky.xyzz        	;
+        o.high        	= o.low/def_hdr     ;
+        return        	o;
+}
+#endif

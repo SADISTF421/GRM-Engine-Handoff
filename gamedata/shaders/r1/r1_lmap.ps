@@ -1,0 +1,30 @@
+#include "r1_common.h"
+
+struct 	v2p
+{
+ 	half2 	tc0: 		TEXCOORD0;	// base
+ 	half2 	tc1: 		TEXCOORD1;	// lmap
+  	half3	c0:		COLOR0;
+	half3	c1:	        COLOR1;
+};
+
+
+//////////////////////////////////////////////////////////////////////////////////////////
+// Pixel
+half4 	main_ps_1_1	( v2p I )	: COLOR
+{
+	half4	t_base 	= tex2D		(s_base,I.tc0);
+	half4	t_lmap 	= tex2D		(s_lmap,I.tc1);
+
+	// lighting
+	half3 	l_base 	=SL_R1_BAKED_GAIN*( t_lmap.rgb * L_lmap_color);	// base light-map
+	half3	l_vertex= I.c0;				// hemi + flare + any vertex-light
+	half3 	l_sun 	= I.c1*t_lmap.a;		// sun color
+	half3	light	= l_base + l_vertex + l_sun;
+
+	// final-color
+	half3	final 	= light*t_base*2;
+	
+	// out
+	return  half4	(final.r,final.g,final.b,t_base.a);
+}

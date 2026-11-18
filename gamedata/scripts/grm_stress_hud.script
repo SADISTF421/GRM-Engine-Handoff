@@ -1,0 +1,61 @@
+-- Движение только HUD оружия при действующем стрессе.
+local plugin, attempted, failed, last_value = nil, false, false, false
+local function setup()
+    if attempted then return plugin ~= nil end
+    attempted = true
+    local ok, result = pcall(function()
+        local loadlib = grm_stress_loadlib
+        if type(loadlib) ~= "function" then return nil end
+        local path = getFS():update_path("$game_data$", "plugins\\grm_stress_finalhud\\grm_stress_finalhud.dll")
+        local loader, why = loadlib(path, "luaopen_grm_stress_finalhud")
+        if not loader then printf("[GRM_STRESS_HUD] DLL не загружена: %s", tostring(why)); return nil end
+        local value = loader()
+        if type(value) ~= "table" or type(value.install) ~= "function" or type(value.set_enabled) ~= "function" then return nil end
+        if not value.install() then printf("[GRM_STRESS_HUD] Версия движка не совпадает; эффект отключён"); return nil end
+        return value
+    end)
+    if not ok then printf("[GRM_STRESS_HUD] Ошибка запуска: %s", tostring(result)); return false end
+    plugin = result
+    if plugin then printf("[GRM_STRESS_HUD] Новый обработчик HUD запущен") end
+    return plugin ~= nil
+end
+local function set_active(value)
+    if value and not setup() then return end
+    if plugin and value ~= last_value then plugin.set_enabled(value); last_value = value end
+end
+function reset()
+    if plugin then pcall(plugin.set_enabled, false) end
+    last_value = false
+end
+local function step(stress)
+    local a = db and db.actor
+    if not stress or not a or not a:alive() or a:is_talking() or a:has_info("disabled_ui") or device().precache_frame > 0 then set_active(false); return end
+    if shiza_hud_items and shiza_hud_items.is_using_item and shiza_hud_items.is_using_item() then set_active(false); return end
+    if shiza_radiation and shiza_radiation.is_death_started and shiza_radiation.is_death_started() then set_active(false); return end
+    if shiza_vodka and shiza_vodka.is_death_started and shiza_vodka.is_death_started() then set_active(false); return end
+    local item = a:active_item()
+    if not item then set_active(false); return end
+    local section = item:section() or ""
+    -- Кость и бинокль не входят в обычную проверку оружия.
+    local light_item = section == "bolt" or section == "wpn_binoc" or section:find("knife", 1, true)
+    if not light_item and not isWeapon(item) then set_active(false); return end
+    if section:find("grenade", 1, true) then set_active(false); return end
+    set_active(true)
+end
+-- Показать фактическую доступность загрузчика и состояние плагина в игре.
+function diagnostic_status()
+    local ok, value = pcall(function() return grm_stress_loadlib end)
+    local loadlib = ok and type(value) == "function"
+    local loader_status = loadlib and "есть" or "нет"
+    local plugin_status = plugin and "подключён" or (failed and "ошибка" or (attempted and "не загружен" or "не запускался"))
+    local frames = plugin and plugin.get_hits and ("; кадров: " .. tostring(plugin.get_hits())) or ""
+    return "Проверка HUD: загрузчик " .. loader_status .. "; плагин " .. plugin_status .. frames
+end
+function update(stress)
+    if failed then return end
+    local ok, err = pcall(step, stress)
+    if not ok then
+        reset(); failed = true
+        printf("[GRM_STRESS_HUD] Ошибка, эффект отключён: %s", tostring(err))
+    end
+end

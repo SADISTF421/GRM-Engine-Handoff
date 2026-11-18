@@ -1,0 +1,246 @@
+-- SHIZOPHRENIA LOST / HORROR FLIES SOUND + VISIBILITY TEST4.
+-- Visual controller plus positional corpse-fly buzz. No damage, input locks, camera/PPE or weather edits.
+-- Integration: update() in actor_binder:update; reset() in reinit and net_destroy.
+local ENABLED = true
+local TEST_MODE = false -- true: 8-14 s between events; normal: 45-95 s.
+local LOOK_DOT = 0.94 -- stop peripheral effects when the camera points within about 20 degrees.
+local levels = {
+    l01_escape=1, l02_garbage=1, l03_agroprom=1, l04_darkvalley=1,
+    l05_bar=1, l06_rostok=1, l07_military=2, l08_yantar=2,
+    l10_radar=3, l11_pripyat=2
+}
+local defs = {
+    flies={height=0.95, duration=1500}, dust={height=0.45, duration=2400},
+    low_mist={height=0.06, duration=4500}, grit={height=0.18, duration=1700},
+    motes={height=1.15, duration=3200}, edge_wisp={height=0.55, duration=900}
+}
+local pools = {
+    {"dust","motes","grit","low_mist","flies","edge_wisp"},
+    {"dust","low_mist","grit","motes","flies","edge_wisp"},
+    {"edge_wisp","dust","low_mist","edge_wisp","grit","motes","flies"}
+}
+local CORPSE_DURATION = 23000
+local CORPSE_DELAY = 8000 -- Time since first nearby dead-body observation, not a death callback.
+local CORPSE_COOLDOWN = 35000 -- Quiet time after stop/expiry, in addition to scan interval.
+local BUZZ_DURATION = 22779
+local corpse_next_allowed = 0
+local dead_since = {}
+local active, corpse_effect
+local actor_id, location, previous_time
+local next_event, next_tick, next_corpse_scan = 0, 0, 0
+local seen_corpses, failed, forced = {}, {}, nil
+local function poscopy(p) return vector():set(p.x,p.y,p.z) end
+local function sqdist(a,b)
+    local x,y,z=a.x-b.x,a.y-b.y,a.z-b.z
+    return x*x+y*y+z*z
+end
+local function stop_event(e)
+    if e and e.corpse_id then
+        corpse_next_allowed=math.max(corpse_next_allowed,time_global()+CORPSE_COOLDOWN)
+    end
+    if e and e.buzz then
+        pcall(function() e.buzz:stop() end)
+        e.buzz=nil
+    end
+    if e and e.ps then
+        pcall(function() e.ps:stop() end)
+        e.ps=nil
+    end
+end
+local function clear_active()
+    stop_event(active); stop_event(corpse_effect)
+    active=nil; corpse_effect=nil
+end
+function reset()
+    clear_active()
+    actor_id=nil; location=nil; previous_time=nil
+    next_event=0; next_tick=0; next_corpse_scan=0
+    seen_corpses={}; failed={}; forced=nil
+    dead_since={};corpse_next_allowed=0
+end
+local function blocked(a)
+    if a:is_talking() or a:has_info("disabled_ui") then return true end
+    if game and type(game.has_active_tutorial)=="function" and game.has_active_tutorial() then return true end
+    if shiza_hud_items and type(shiza_hud_items.is_using_item)=="function" and shiza_hud_items.is_using_item() then return true end
+    if shiza_radiation and type(shiza_radiation.is_death_started)=="function" and shiza_radiation.is_death_started() then return true end
+    if shiza_vodka and type(shiza_vodka.is_death_started)=="function" and shiza_vodka.is_death_started() then return true end
+    return false
+end
+local function create(kind,pos,now,duration,corpse_id)
+    if failed[kind] then return nil end
+    local ps
+    local ok,err=pcall(function()
+        ps=particles_object("sl_horror\\"..kind)
+        ps:play_at_pos(pos)
+    end)
+    if not ok then
+        if ps then pcall(function() ps:stop() end) end
+        failed[kind]=true
+        if type(printf)=="function" then printf("[sl_horror] disabled %s: %s",kind,tostring(err)) end
+        return nil
+    end
+    return {ps=ps,pos=poscopy(pos),started=now,expires=now+duration,corpse_id=corpse_id,kind=kind}
+end
+local function start_corpse_buzz(e,a)
+    local snd
+    local ok,err=pcall(function()
+        snd=sound_object("material\\dead-body\\collide\\muxi")
+        snd:play_at_pos(a,e.pos,0,sound_object.s3d)
+        snd.min_distance=10
+        snd.max_distance=12
+        snd.volume=0
+    end)
+    if ok then
+        e.buzz=snd
+    else
+        if snd then pcall(function() snd:stop() end) end
+        if type(printf)=="function" then printf("[sl_horror] buzz failed: %s",tostring(err)) end
+    end
+end
+local function placement(a,d,kind)
+    -- Camera defines a side sector, but particles stay at a fixed world position.
+    -- Graph placement is not a physics raycast or indoor/roof detector.
+    if math.abs(d.cam_dir.y)>0.70 then return nil end
+    local x,z=d.cam_dir.x,d.cam_dir.z
+    local len=math.sqrt(x*x+z*z)
+    if len<0.1 then return nil end
+    x=x/len;z=z/len
+    local angle=math.rad(math.random(32,46))
+    if math.random(1,2)==1 then angle=-angle end
+    local dx=x*math.cos(angle)+z*math.sin(angle)
+    local dz=z*math.cos(angle)-x*math.sin(angle)
+    local dir=vector():set(dx,0,dz)
+    local distance=math.random(4,7)
+    local vertex=level.vertex_in_direction(a:level_vertex_id(),dir,distance)
+    if not vertex or vertex==4294967295 then return nil end
+    local ground=level.vertex_position(vertex)
+    if not ground then return nil end
+    local ap=a:position()
+    if math.abs(ground.y-ap.y)>2.2 then return nil end
+    local gx,gz=ground.x-ap.x,ground.z-ap.z
+    local gl=math.sqrt(gx*gx+gz*gz)
+    if gl<2.5 or gl>8 or (gx*dx+gz*dz)/gl<0.85 then return nil end
+    local cx,cz=ground.x-d.cam_pos.x,ground.z-d.cam_pos.z
+    local cl=math.sqrt(cx*cx+cz*cz)
+    if cl<1 or (cx*x+cz*z)/cl>0.92 then return nil end
+    return vector():set(ground.x,ground.y+defs[kind].height,ground.z)
+end
+local function looking_at(e,d)
+    local x,y,z=e.pos.x-d.cam_pos.x,e.pos.y-d.cam_pos.y,e.pos.z-d.cam_pos.z
+    local n=math.sqrt(x*x+y*y+z*z)
+    if n<0.2 then return true end
+    local cd=d.cam_dir
+    local cn=math.sqrt(cd.x*cd.x+cd.y*cd.y+cd.z*cd.z)
+    if cn<0.1 then return false end
+    return (x*cd.x+y*cd.y+z*cd.z)/(n*cn)>LOOK_DOT
+end
+local function scan_corpse(a,now)
+    if corpse_effect or now<corpse_next_allowed or not db.storage or type(IsStalker)~="function" or type(level.object_by_id)~="function" then return end
+    local closest,cp,best=nil,nil,100
+    local checked=0
+    -- Bounded scan of registered online objects only, not every ALife object or every world ID.
+    for id,_ in pairs(db.storage) do
+        if type(id)=="number" and id~=a:id() then
+            checked=checked+1
+            local ok,obj=pcall(level.object_by_id,id)
+            if ok and obj and not seen_corpses[id] then
+                local valid,dead,p=pcall(function()
+                    if not IsStalker(obj) then return sl_rotting.is_rotten(obj),obj:position() end
+                    return not obj:alive(),obj:position()
+                end)
+                if valid and dead and p then
+                    local ds=sqdist(p,a:position())
+                    if ds<100 then
+                        if not dead_since[id] then dead_since[id]=now end
+                        if now-dead_since[id]>=CORPSE_DELAY and ds<best and ds>1 then
+                            closest=id;cp=poscopy(p);best=ds
+                        end
+                    end
+                elseif valid and not dead then
+                    dead_since[id]=nil
+                end
+            end
+            if checked>=128 then break end
+        end
+    end
+    if closest then
+        cp.y=cp.y+0.35
+        corpse_effect=create("flies",cp,now,CORPSE_DURATION,closest)
+        if corpse_effect then
+            seen_corpses[closest]=true
+            start_corpse_buzz(corpse_effect,a)
+        end
+    end
+end
+local function update_corpse(a,now)
+    if not corpse_effect then return end
+    local e=corpse_effect
+    if e.buzz then
+        local fade_in=math.min(1,math.max(0,(now-e.started)/300))
+        local fade_out=math.min(1,math.max(0,(e.started+BUZZ_DURATION-now)/1200))
+        local distance=math.sqrt(sqdist(e.pos,a:position()))
+        -- Manual smooth distance gain; native attenuation begins only at 10 m.
+        local proximity=math.min(1,math.max(0,(10-distance)/8.5))
+        pcall(function() e.buzz.volume=0.85*fade_in*fade_out*proximity end)
+    end
+    local ok,valid=pcall(function()
+        local obj=level.object_by_id(e.corpse_id)
+        return obj and (sl_rotting.is_rotten(obj) or (IsStalker(obj) and not obj:alive()))
+    end)
+    if now>=e.expires or sqdist(e.pos,a:position())>144 or not ok or not valid then
+        stop_event(e);corpse_effect=nil
+    end
+end
+function set_test_mode(value) TEST_MODE=value==true;next_event=0 end
+function force_next(kind)
+    if not defs[kind] then return false end
+    forced=kind;next_event=0
+    return true
+end
+function set_enabled(value)
+    ENABLED=value==true
+    if not ENABLED then reset() end
+end
+function update()
+    local a=db and db.actor
+    if not ENABLED or not a or not a:alive() then
+        if actor_id or active or corpse_effect then reset() end
+        return
+    end
+    local now=time_global()
+    local loc=string.lower(level.name())
+    if actor_id~=a:id() or location~=loc or (previous_time and now<previous_time) then
+        reset();actor_id=a:id();location=loc
+        next_event=now+(TEST_MODE and 3000 or math.random(12000,18000))
+        next_corpse_scan=now+5000
+        if type(printf)=="function" then printf("[sl_horror] ready: %s; test=%s",loc,tostring(TEST_MODE)) end
+    end
+    previous_time=now
+    if now<next_tick then return end
+    next_tick=now+80
+    if not levels[loc] or blocked(a) then
+        clear_active();next_event=now+math.random(12000,18000);return
+    end
+    local d=device()
+    if not d or not d.cam_pos or not d.cam_dir then return end
+    if active then
+        if now>=active.expires or sqdist(active.pos,d.cam_pos)>144 or
+           (now-active.started>200 and looking_at(active,d)) then
+            stop_event(active);active=nil
+        end
+    end
+    update_corpse(a,now)
+    if now>=next_corpse_scan then
+        next_corpse_scan=now+8000;scan_corpse(a,now)
+    end
+    if active or now<next_event then return end
+    local tier=levels[loc]
+    local pool=pools[tier]
+    local kind=forced or pool[math.random(1,#pool)]
+    forced=nil
+    local pos=placement(a,d,kind)
+    if pos then active=create(kind,pos,now,defs[kind].duration) end
+    if TEST_MODE then next_event=now+math.random(8000,14000)
+    elseif tier==3 then next_event=now+math.random(30000,65000)
+    else next_event=now+math.random(45000,95000) end
+end

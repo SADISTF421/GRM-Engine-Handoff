@@ -1,0 +1,23 @@
+local shown = false
+
+local function has(obj, key)
+    local ok, value = pcall(function() return obj[key] end)
+    if not ok or value == nil then return "0" end
+    local kind = type(value)
+    if kind == "function" or kind == "userdata" then return "1" end
+    return "?"
+end
+
+function on_hit(obj, bone_index)
+    if shown or not obj or not db.actor then return end
+    shown = true
+    local text = "GORE API: H=" .. has(obj, "set_bone_visible")
+        .. " I=" .. has(obj, "get_bone_id")
+        .. " B=" .. has(obj, "bone_id")
+        .. " N=" .. has(obj, "bone_name")
+        .. " P=" .. has(obj, "bone_position")
+        .. " hit=" .. tostring(bone_index)
+    pcall(function()
+        db.actor:give_game_news(text, "ui\\ui_iconsTotal", Frect():set(83,470,83,47), 0, 15000)
+    end)
+end

@@ -1,0 +1,296 @@
+-- Водка: прежние пороги и ресурсы, сохраняемые таймеры и стадии сцены.
+-- Отложенные замыкания заменены явным автоматом состояний.
+local VODKA_TIMER = 50000
+
+local THRESHOLD_HIT = 3
+local THRESHOLD_THOUGHTS = 4
+local THRESHOLD_DRUNK = 5
+local THRESHOLD_DEATH = 6
+
+-- ============================================================
+-- PPE
+-- ============================================================
+
+local PPE_HIT_ID = 6868
+local PPE_HIT = "testalk.ppe"
+
+local PPE_BLACK_ID = 6869
+local PPE_BLACK = "black2.ppe"
+
+local PPE_DRUNK_ID = 6870
+local PPE_DRUNK = "testalk2.ppe"
+
+local PPE_DEATH_ID = 6871
+local PPE_DEATH = "death_black.ppe"
+
+-- ============================================================
+-- АНИМАЦИИ КАМЕРЫ
+-- ============================================================
+
+local CAM_HIT = "camera_effects\\broge.anm"
+local CAM_HIT_FRONT = "camera_effects\\hit_back2.anm"
+local CAM_DRUNK = "camera_effects\\drunk.anm"
+local CAM_DEATH = "camera_effects\\scope_shake.anm"
+local CAM_DEATH_END = "camera_effects\\head_shot2.anm"
+
+-- ============================================================
+-- ЗВУКИ
+-- ============================================================
+
+local SOUND_MEMORY = "crit_sound\\memory"
+local SOUND_DREAM = "crit_sound\\panichka2"
+local SOUND_DEATH = "weapons\\pm_shoot"
+local SOUND_BREATH = "affects\\silence"
+
+-- Звук inv_vodka здесь не запускается:
+-- его уже запускает shiza_hud_items.script.
+
+
+local counter, reset_time, black_until = 0, 0, 0
+local death_started, death_stage, phase_until = false, 0, 0
+local last_msg_index, dream_sound = nil, nil
+local scene_sounds, pending = {}, nil
+local MESSAGES = {
+    {
+        icon = "stalker",
+        sender = "???",
+        text = "Ты думаешь, что управляешь телом"
+    },
+    {
+        icon = "stalker",
+        sender = "???",
+        text = "Почему вокруг стало так тихо..."
+    },
+    {
+        icon = "stalker",
+        sender = "???",
+        text = "Слишком поздно возвращаться"
+    }
+}
+
+local MSG_SHOWTIME_PER_SYMBOL = 150
+
+local tips_icons = {
+    trader = {0,100},
+    dolg = {150,0},
+    freedom = {0,150},
+    ecolog = {450,100},
+    arena = {350,150},
+    stalker = {100,150},
+    krot = {200,50},
+    barman = {400,50},
+    wolf = {0,50},
+    o_soznanie = {100,50},
+    monolith = {100,150},
+    saharov = {450,150},
+    prizrak = {0,50},
+    killer = {0,200}
+}
+
+local function play_sound(path)
+    if not db.actor or not path then
+        return nil
+    end
+
+    local snd = xr_sound.get_safe_sound_object(path)
+
+    if snd then
+        snd:play_at_pos(
+            db.actor,
+            vector():set(0, 0, 0),
+            0,
+            sound_object.s2d
+        )
+    end
+
+    return snd
+end
+
+local function stop_dream_sound()
+    if dream_sound then
+        dream_sound:stop()
+        dream_sound = nil
+    end
+end
+
+local function send_msg()
+    if not db.actor then
+        return
+    end
+
+    local count = #MESSAGES
+    if count == 0 then
+        return
+    end
+
+    local id = math.random(count)
+
+    if count > 1 then
+        while id == last_msg_index do
+            id = math.random(count)
+        end
+    end
+
+    last_msg_index = id
+
+    local msg = MESSAGES[id]
+    local x, y = 500, 100
+
+    if tips_icons[msg.icon] then
+        x = tips_icons[msg.icon][1]
+        y = tips_icons[msg.icon][2]
+    end
+
+    local news =
+        "%c[255,160,160,160]" ..
+        game.translate_string(msg.sender) ..
+        "\\n%c[default]" ..
+        game.translate_string(msg.text)
+
+    db.actor:give_game_news(
+        news,
+        "ui\\ui_icons_task",
+        Frect():set(x, y, 50, 50),
+        0,
+        MSG_SHOWTIME_PER_SYMBOL * string.len(news)
+    )
+end
+
+
+local function keep_sound(path)
+    local snd = play_sound(path)
+    if snd then scene_sounds[#scene_sounds+1] = snd end
+    return snd
+end
+local function stop_scene_sounds()
+    for _, snd in ipairs(scene_sounds) do if snd:playing() then snd:stop() end end
+    scene_sounds = {}
+end
+local function clear_pp()
+    for _, id in ipairs({PPE_HIT_ID,PPE_BLACK_ID,PPE_DRUNK_ID,PPE_DEATH_ID}) do level.remove_pp_effector(id) end
+end
+local function put_pp(path, id, factor)
+    level.add_pp_effector(path,id,true)
+    level.set_pp_effector_factor(id,factor)
+end
+local function restore_pp()
+    if counter >= THRESHOLD_HIT then put_pp(PPE_HIT,PPE_HIT_ID,1) end
+    if black_until > time_global() then put_pp(PPE_BLACK,PPE_BLACK_ID,1) end
+    if counter >= THRESHOLD_DRUNK then put_pp(PPE_DRUNK,PPE_DRUNK_ID,0.75) end
+    if death_started then put_pp(PPE_DEATH,PPE_DEATH_ID,1) end
+end
+local function end_drunk()
+    counter,reset_time,black_until=0,0,0
+    clear_pp()
+    level.remove_cam_effector(6666)
+    stop_dream_sound()
+    stop_scene_sounds()
+end
+function reset()
+    if death_started then level.enable_input() end
+    for _,id in ipairs({6872,1488,6666,6565,6881,6882}) do level.remove_cam_effector(id) end
+    stop_dream_sound();stop_scene_sounds();clear_pp()
+    counter,reset_time,black_until=0,0,0
+    death_started,death_stage,phase_until=false,0,0
+    last_msg_index,pending=nil,nil
+end
+function queue_load_state(actor)
+    pending=shiza_state.read(actor,"vodka")
+end
+function restore_pending()
+    if not pending or not db.actor or not db.actor:alive() then return end
+    local saved=pending
+    reset()
+    local now=time_global()
+    counter=math.floor(shiza_state.number(saved,"count",0,0,THRESHOLD_DEATH))
+    local left=shiza_state.number(saved,"reset",0,0,VODKA_TIMER)
+    reset_time=now+left
+    black_until=now+shiza_state.number(saved,"black",0,0,1200)
+    death_stage=math.floor(shiza_state.number(saved,"stage",0,0,3))
+    death_started=death_stage>0
+    phase_until=now+shiza_state.number(saved,"phase",0,0,60000)
+    local msg=math.floor(shiza_state.number(saved,"message",0,0,#MESSAGES))
+    last_msg_index=msg>0 and msg or nil
+    if not death_started and left<=0 then counter=0;black_until=0 end
+    restore_pp()
+    if death_started then
+        level.disable_input();db.actor:hide_weapon()
+        -- Уже сыгравшие камеры и выстрел не повторяются при загрузке.
+        if death_stage==1 then keep_sound(SOUND_BREATH) end
+    elseif counter>=THRESHOLD_DRUNK then
+        dream_sound=play_sound(SOUND_DREAM)
+    end
+end
+function update()
+    restore_pending()
+    local actor=db.actor
+    if not actor or not actor:alive() then return end
+    local now=time_global()
+    if death_started then
+        if now<phase_until then return end
+        if death_stage==1 then
+            death_stage=2;phase_until=now+1500
+            level.add_cam_effector(CAM_HIT,6882,false,"")
+            level.add_cam_effector(CAM_DEATH,6565,false,"")
+        elseif death_stage==2 then
+            death_stage=3
+            keep_sound(SOUND_DEATH)
+            local length=level.add_cam_effector(CAM_DEATH_END,6881,false,"")
+            local delay=550
+            if type(length)=="number" and length>0 then
+                local ms=length*1000
+                delay=math.max(1,ms-math.min(600,ms*0.25))
+            end
+            phase_until=now+delay
+        elseif death_stage==3 then
+            actor:kill(actor);level.enable_input()
+            stop_dream_sound();stop_scene_sounds()
+        end
+        return
+    end
+    if black_until>0 and now>=black_until then
+        black_until=0;level.remove_pp_effector(PPE_BLACK_ID)
+    end
+    if counter>0 and now>=reset_time then end_drunk() end
+end
+function on_actor_use(obj,section)
+    local actor=db.actor
+    if not actor or not actor:alive() then return end
+    section=section or (obj and obj:section())
+    if section~="vodka" or (obj and obj:section()~="vodka") then return end
+    update()
+    if death_started or shiza_radiation.is_death_started() then return end
+    counter=counter+1;reset_time=time_global()+VODKA_TIMER
+    if counter==THRESHOLD_HIT then
+        put_pp(PPE_HIT,PPE_HIT_ID,1)
+        level.add_cam_effector(CAM_HIT,6872,false,"")
+        level.add_cam_effector(CAM_HIT_FRONT,1488,false,"")
+        keep_sound(SOUND_MEMORY)
+    elseif counter==THRESHOLD_THOUGHTS then
+        send_msg();put_pp(PPE_BLACK,PPE_BLACK_ID,1)
+        black_until=time_global()+1200
+    elseif counter==THRESHOLD_DRUNK then
+        put_pp(PPE_DRUNK,PPE_DRUNK_ID,0.75)
+        level.add_cam_effector(CAM_DRUNK,6666,false,"")
+        stop_dream_sound();dream_sound=play_sound(SOUND_DREAM)
+    elseif counter>=THRESHOLD_DEATH then
+        death_started=true;death_stage=1;phase_until=time_global()+2500
+        level.disable_input()
+        local wnd=level.main_input_receiver()
+        if wnd then level.start_stop_menu(wnd,true) end
+        actor:hide_weapon();put_pp(PPE_DEATH,PPE_DEATH_ID,1)
+        keep_sound(SOUND_BREATH)
+    end
+end
+function save_state(actor)
+    if pending then
+        shiza_state.write(actor,"vodka",pending)
+        return
+    end
+    local now=time_global()
+    shiza_state.write(actor,"vodka",{count=counter,
+        reset=shiza_state.left(reset_time,now),black=shiza_state.left(black_until,now),
+        stage=death_stage,phase=shiza_state.left(phase_until,now),message=last_msg_index or 0})
+end
+function is_death_started() return death_started end
+function should_hide_weapon() return death_started end

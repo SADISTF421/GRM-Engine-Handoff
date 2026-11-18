@@ -1,0 +1,533 @@
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+
+local CAMERA_ID = 99215
+local CAMERA_ANIMATION = "shiza_stress\\stress_sway_soft_grm.anm"
+local CAMERA_CALLBACK = "shiza_kill_stress.on_camera_loop_end"
+local CAMERA_LOOP_MS = 10000           
+local CAMERA_ZERO_STEP_MS = 2500       
+local POSTPROCESS_ID = 99216
+local POSTPROCESS_FILE = "death_black.ppe"
+local BLOOD_TEXTURE_PREFIX = "ui\\shiza_stress_blood"
+local HEARTBEAT_SOUND = "shiza_stress\\heartbeat"
+
+local MAX_STRESS_EPISODES = 4
+local KILLS_TO_STRESS = 6              
+local KILL_WINDOW_MS = 120000          
+local STRESS_DURATION_MS = 120000      
+local RELIEF_IMMUNITY_MS = 180000      
+local BULLET_RESIST_BONUS = 0.10       
+local HIT_MIN_LOSS = 0.01              
+local SOUND_MAX_VOLUME = 0.60
+local SOUND_ATTACK_SECONDS = 1.2
+local SOUND_RELEASE_SECONDS = 1.8
+local BLOOD_FADE_IN_RATE = 210
+local BLOOD_FADE_OUT_RATE = 170
+local BLOOD_FRAME_INTERVAL = 260
+local MAX_POSTPROCESS_FACTOR = 0.08
+local SHOW_TIPS = true                 
+local DEBUG_TIPS = false               
+
+ 
+local RELIEF_ITEMS = {
+    vodka = true,
+    sigi = true,
+    shiza_cigarette_pack = true
+}
+
+local stress_episodes = 0
+local kill_count = 0
+local kill_window_until = 0
+local stress_active = false
+local stress_until = 0
+local immunity_until = 0
+local pending_state = nil
+
+local blood_overlay = nil
+local blood_frame = 1
+local blood_frame_at = 0
+local blood_alpha = 0
+local blood_color_supported = nil
+local blood_warning_printed = false
+
+local heartbeat_sound = nil
+local heartbeat_volume = 0
+local postprocess_active = false
+local postprocess_factor = 0
+local postprocess_warning_printed = false
+local sound_warning_printed = false
+local last_visual_update = nil
+
+ 
+local camera_running = false
+local camera_loop_started = 0
+local camera_loop_ms = CAMERA_LOOP_MS
+local camera_loop_done = false         
+local camera_callback_seen = false
+local camera_stop_at = 0
+local camera_failed = false
+
+ 
+local last_health = nil
+
+local function tip(text)
+    if not SHOW_TIPS or not db.actor then return end
+    pcall(function()
+        db.actor:give_game_news(text, "ui\\ui_iconsTotal", Frect():set(83,470,83,47), 0, 5000)
+    end)
+end
+
+local function debug_tip(text)
+    if DEBUG_TIPS then
+        local old = SHOW_TIPS
+        SHOW_TIPS = true
+        tip(text)
+        SHOW_TIPS = old
+    end
+end
+
+local function death_scene()
+    local ok, result = pcall(function()
+        return (shiza_radiation and shiza_radiation.is_death_started and shiza_radiation.is_death_started())
+            or (shiza_vodka and shiza_vodka.is_death_started and shiza_vodka.is_death_started())
+    end)
+    return ok and result or false
+end
+
+local function approach(value, target, step)
+    if value < target then return math.min(target, value + step) end
+    return math.max(target, value - step)
+end
+
+ 
+ 
+ 
+
+local function remove_camera_effect()
+    pcall(function() level.remove_cam_effector(CAMERA_ID) end)
+    camera_running = false
+    camera_loop_done = false
+    camera_stop_at = 0
+end
+
+local function start_camera_loop(now)
+    if camera_failed then return false end
+    local ok, length = pcall(function()
+         
+         
+         
+        return level.add_cam_effector(CAMERA_ANIMATION, CAMERA_ID, false, CAMERA_CALLBACK)
+    end)
+    if not ok then
+        camera_failed = true
+        printf("[STRESS] Не удалось запустить покачивание камеры: %s", tostring(length))
+        return false
+    end
+    local ms = tonumber(length) and math.floor(tonumber(length) * 1000) or 0
+    if ms < 1000 then ms = CAMERA_LOOP_MS end
+    camera_loop_ms = ms
+    camera_running = true
+    camera_loop_started = now
+    camera_loop_done = false
+    camera_stop_at = 0
+    return true
+end
+
+ 
+function on_camera_loop_end()
+    camera_loop_done = true
+    camera_callback_seen = true
+end
+
+local function request_camera_stop(now)
+    if not camera_running or camera_stop_at > 0 then return end
+    local elapsed = math.max(0, now - camera_loop_started)
+    local steps = math.ceil(elapsed / CAMERA_ZERO_STEP_MS)
+    if steps < 1 then steps = 1 end
+    camera_stop_at = camera_loop_started + steps * CAMERA_ZERO_STEP_MS
+end
+
+local function update_camera(now)
+    if stress_active then
+        camera_stop_at = 0
+        if not camera_running then
+            start_camera_loop(now)
+            return
+        end
+         
+        local margin = camera_callback_seen and camera_loop_ms or 1500
+        if camera_loop_done or now >= camera_loop_started + camera_loop_ms + margin then
+            start_camera_loop(now)
+        end
+        return
+    end
+
+    if camera_running then
+        request_camera_stop(now)
+        if camera_loop_done or now >= camera_stop_at then remove_camera_effect() end
+    end
+end
+
+ 
+ 
+ 
+
+local function stop_heartbeat()
+    if heartbeat_sound then
+        pcall(function() heartbeat_sound:stop() end)
+    end
+    heartbeat_sound = nil
+    heartbeat_volume = 0
+end
+
+local function remove_postprocess()
+    pcall(function() level.remove_pp_effector(POSTPROCESS_ID) end)
+    postprocess_active = false
+    postprocess_factor = 0
+end
+
+local function remove_blood_overlay()
+    if blood_overlay then
+        pcall(function() get_hud():RemoveDialogToRender(blood_overlay) end)
+    end
+    blood_overlay = nil
+    blood_alpha = 0
+    blood_color_supported = nil
+end
+
+local function clear_visuals()
+    pcall(function() grm_stress_blur.reset() end)
+    remove_camera_effect()
+    remove_postprocess()
+    stop_heartbeat()
+    remove_blood_overlay()
+    last_visual_update = nil
+end
+
+local function create_blood_overlay()
+    if blood_overlay then return true end
+
+    local ok, result = pcall(function()
+        local overlay = CUIStatic()
+        overlay:Init(0, 0, 1024, 768)
+        overlay:SetStretchTexture(true)
+        overlay:InitTexture(BLOOD_TEXTURE_PREFIX .. tostring(blood_frame))
+        get_hud():AddDialogToRender(overlay)
+        return overlay
+    end)
+
+    if ok and result then
+        blood_overlay = result
+        return true
+    end
+
+    if not blood_warning_printed then
+        blood_warning_printed = true
+        printf("[STRESS] Не удалось создать кровавый экранный слой: %s", tostring(result))
+    end
+    return false
+end
+
+local function set_blood_texture_color(alpha)
+    if not blood_overlay or blood_color_supported == false then return end
+
+    local ok = pcall(function()
+        blood_overlay:SetTextureColor(GetARGB(alpha, 255, 255, 255))
+    end)
+
+    blood_color_supported = ok
+    if not ok and not blood_warning_printed then
+        blood_warning_printed = true
+        printf("[STRESS] Движок не поддержал прозрачность текстуры; используется её штатная прозрачность.")
+    end
+end
+
+local function update_blood_overlay(progress, now, dt)
+    local target_alpha = 0
+    if progress > 0 then
+        target_alpha = math.floor(80 + 175 * progress)
+        local pulse = 0.92 + 0.08 * (0.5 + 0.5 * math.sin(now / 500))
+        target_alpha = math.floor(target_alpha * pulse)
+    end
+
+    local rate = target_alpha > blood_alpha and BLOOD_FADE_IN_RATE or BLOOD_FADE_OUT_RATE
+    blood_alpha = approach(blood_alpha, target_alpha, rate * dt)
+
+    if blood_alpha > 1 or blood_overlay then
+        if not create_blood_overlay() then return end
+
+        if stress_active and now >= blood_frame_at then
+            blood_frame = blood_frame % 5 + 1
+            blood_frame_at = now + BLOOD_FRAME_INTERVAL
+            pcall(function()
+                blood_overlay:InitTexture(BLOOD_TEXTURE_PREFIX .. tostring(blood_frame))
+            end)
+        end
+
+        local show = true
+        pcall(function() show = level.main_input_receiver() == nil end)
+        pcall(function() blood_overlay:Show(show) end)
+        set_blood_texture_color(math.floor(blood_alpha + 0.5))
+
+        if target_alpha == 0 and blood_alpha <= 1 then remove_blood_overlay() end
+    end
+end
+
+local function update_postprocess(progress, dt)
+    local target = MAX_POSTPROCESS_FACTOR * progress
+    if target > 0.001 and not postprocess_active then
+        local ok, err = pcall(function()
+            level.add_pp_effector(POSTPROCESS_FILE, POSTPROCESS_ID, true)
+        end)
+        if ok then
+            postprocess_active = true
+            pcall(function() level.set_pp_effector_factor(POSTPROCESS_ID, 0.001) end)
+        elseif not postprocess_warning_printed then
+            postprocess_warning_printed = true
+            printf("[STRESS] Не удалось запустить красный postprocess: %s", tostring(err))
+        end
+    end
+
+    local duration = target > postprocess_factor and 0.75 or 1.3
+    postprocess_factor = approach(postprocess_factor, target, MAX_POSTPROCESS_FACTOR * dt / duration)
+
+    if postprocess_active then
+        pcall(function() level.set_pp_effector_factor(POSTPROCESS_ID, math.max(0.001, postprocess_factor)) end)
+        if target <= 0.001 and postprocess_factor <= 0.001 then remove_postprocess() end
+    end
+end
+
+local function update_heartbeat(actor, progress, dt)
+    local target = progress > 0 and SOUND_MAX_VOLUME or 0
+    if target > 0 and not heartbeat_sound then
+        local ok, result = pcall(function() return sound_object(HEARTBEAT_SOUND) end)
+        if ok and result then
+            heartbeat_sound = result
+            heartbeat_volume = 0
+            local played, err = pcall(function()
+                heartbeat_sound.volume = 0
+                heartbeat_sound:play_at_pos(actor, vector():set(0, 0, 0), 0,
+                    sound_object.s2d + sound_object.looped)
+            end)
+            if not played then
+                stop_heartbeat()
+                if not sound_warning_printed then
+                    sound_warning_printed = true
+                    printf("[STRESS] Не удалось запустить сердцебиение: %s", tostring(err))
+                end
+                return
+            end
+        elseif not sound_warning_printed then
+            sound_warning_printed = true
+            printf("[STRESS] Не удалось загрузить звук сердцебиения: %s", tostring(result))
+        end
+    end
+
+    local duration = target > heartbeat_volume and SOUND_ATTACK_SECONDS or SOUND_RELEASE_SECONDS
+    heartbeat_volume = approach(heartbeat_volume, target, SOUND_MAX_VOLUME * dt / duration)
+    if heartbeat_sound then
+        local ok = pcall(function() heartbeat_sound.volume = heartbeat_volume end)
+        if not ok then stop_heartbeat() end
+    end
+    if target <= 0 and heartbeat_volume <= 0.005 then stop_heartbeat() end
+end
+
+local function update_visuals(actor, now)
+    local dt = 0.05
+    if last_visual_update then dt = math.max(0, math.min(0.25, (now - last_visual_update) / 1000)) end
+    last_visual_update = now
+
+     
+    local progress = stress_active and 1 or 0
+    pcall(function() grm_stress_blur.update(stress_active, dt) end)
+    update_blood_overlay(progress, now, dt)
+    update_postprocess(progress, dt)
+    update_heartbeat(actor, progress, dt)
+end
+
+ 
+ 
+ 
+ 
+ 
+ 
+local function update_bullet_resist(actor)
+    local ok, health = pcall(function() return actor.health end)
+    if not ok or type(health) ~= "number" then last_health = nil; return end
+
+    if stress_active and last_health and health > 0 and not death_scene() then
+        local loss = last_health - health
+        if loss >= HIT_MIN_LOSS and loss < 1 then
+            local refund = loss * BULLET_RESIST_BONUS
+             
+            pcall(function() actor.health = refund end)
+            local ok2, h2 = pcall(function() return actor.health end)
+            if ok2 and type(h2) == "number" then health = h2 end
+        end
+    end
+    last_health = health
+end
+
+ 
+ 
+ 
+
+local function begin_stress(now)
+    stress_episodes = math.min(MAX_STRESS_EPISODES, stress_episodes + 1)
+    stress_active = true
+    stress_until = now + STRESS_DURATION_MS
+    kill_count = 0
+    kill_window_until = 0
+    camera_failed = false
+    printf("[STRESS] Стресс активирован на %s с. Водка или одна сигарета снимают эффект.", tostring(STRESS_DURATION_MS / 1000))
+    tip("Руки дрожат... Стресс: пулестойкость +10%. Водка или сигарета помогут успокоиться.")
+end
+
+local function end_stress(now, give_immunity)
+    stress_active = false
+    stress_until = 0
+    kill_count = 0
+    kill_window_until = 0
+    if give_immunity then immunity_until = now + RELIEF_IMMUNITY_MS end
+     
+    request_camera_stop(now)
+end
+
+function is_active() return stress_active end
+
+function on_human_kill()
+    local actor = db.actor
+    if not actor or not actor:alive() then return end
+    restore_pending()
+    if stress_episodes >= MAX_STRESS_EPISODES then return end
+
+    local now = time_global()
+    if stress_active or now < immunity_until then return end
+
+    if now >= kill_window_until then kill_count = 0 end
+    kill_count = kill_count + 1
+    kill_window_until = now + KILL_WINDOW_MS
+
+    printf("[STRESS] Серия убийств: %s/%s", tostring(kill_count), tostring(KILLS_TO_STRESS))
+    debug_tip("[STRESS] Серия: " .. tostring(kill_count) .. "/" .. tostring(KILLS_TO_STRESS))
+    if kill_count >= KILLS_TO_STRESS then begin_stress(now) end
+end
+
+ 
+function on_relief_item(section)
+    if not stress_active or not RELIEF_ITEMS[section] then return end
+
+    end_stress(time_global(), true)
+    printf("[STRESS] Стресс снят предметом %s.", tostring(section))
+    tip("Отпустило. Стресс снят.")
+end
+
+function update()
+    restore_pending()
+    local actor = db.actor
+    if not actor then
+        pcall(function() grm_stress_hud.reset() end)
+        pcall(function() grm_stress_blur.reset() end)
+        return
+    end
+
+    local now = time_global()
+    if not actor:alive() then
+        pcall(function() grm_stress_hud.reset() end)
+        if stress_active then end_stress(now, false) end
+        clear_visuals()
+        last_health = nil
+        return
+    end
+
+    if stress_active and now >= stress_until then
+        end_stress(now, false)
+        printf("[STRESS] Время эффекта стресса истекло (2 минуты).")
+    end
+    if immunity_until > 0 and now >= immunity_until then immunity_until = 0 end
+    if kill_count > 0 and now >= kill_window_until then
+        kill_count = 0
+        kill_window_until = 0
+    end
+
+    update_bullet_resist(actor)
+    pcall(function() grm_stress_hud.update(stress_active) end)
+    update_camera(now)
+    update_visuals(actor, now)
+end
+
+function reset()
+    pcall(function() grm_stress_hud.reset() end)
+    clear_visuals()
+    stress_episodes = 0
+    kill_count = 0
+    kill_window_until = 0
+    stress_active = false
+    stress_until = 0
+    immunity_until = 0
+    pending_state = nil
+    last_health = nil
+    camera_failed = false
+    camera_callback_seen = false
+end
+
+function save_state(actor)
+    if not actor then return end
+    if pending_state then
+        shiza_state.write(actor, "kill_stress", pending_state)
+        return
+    end
+
+    local now = time_global()
+    shiza_state.write(actor, "kill_stress", {
+        episodes = stress_episodes,
+        kills = kill_count,
+        window = shiza_state.left(kill_window_until, now),
+        active = stress_active and 1 or 0,
+        effect = shiza_state.left(stress_until, now),
+        immunity = shiza_state.left(immunity_until, now)
+    })
+end
+
+function queue_load_state(actor)
+    pending_state = shiza_state.read(actor, "kill_stress")
+end
+
+function restore_pending()
+    if not pending_state or not db.actor or not db.actor:alive() then return end
+
+    local saved = pending_state
+    pending_state = nil
+    clear_visuals()
+
+    local now = time_global()
+    stress_episodes = math.floor(shiza_state.number(saved, "episodes", 0, 0, MAX_STRESS_EPISODES))
+    kill_count = math.floor(shiza_state.number(saved, "kills", 0, 0, KILLS_TO_STRESS - 1))
+    local window_left = shiza_state.number(saved, "window", 0, 0, KILL_WINDOW_MS)
+    kill_window_until = now + window_left
+    stress_active = shiza_state.number(saved, "active", 0, 0, 1) >= 1
+     
+    local effect_left = shiza_state.number(saved, "effect", 0, 0, STRESS_DURATION_MS)
+    stress_until = now + effect_left
+    immunity_until = now + shiza_state.number(saved, "immunity", 0, 0, RELIEF_IMMUNITY_MS)
+    last_health = nil
+
+    if not (stress_active and effect_left > 0) then
+        stress_active = false
+        stress_until = 0
+    end
+     
+    if window_left <= 0 then
+        kill_count = 0
+        kill_window_until = 0
+    end
+end

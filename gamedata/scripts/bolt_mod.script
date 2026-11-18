@@ -1,0 +1,204 @@
+-------------- конечное количество болтов -------------
+------------------ реализация Charsi ------------------
+-------------- идейный вдохновитель Z.I.R.D.-----------
+------------------ 17/08 - 13/12 2010 -----------------
+----------------- last edit 23/12/2010 ----------------
+-- версия 1.01
+-- добавлен уборщик бесхозных болтов
+-- исправлен баг при загрузке
+-- добавлено взятие в слот при подборе с болта земли,если болта не было в слоте
+-------------------------------------- можно настроить
+local max_cnt_bolt = 10 -- кол-во бесхозных болтов в игре
+
+-------------------------------------- не трогать
+local bolt_cnt=0	--количество болтов в рюкзаке
+local throwed_bolt_id,bolt_in_hands_id,st,box_id
+local f=true		-- флаг того, что убрали болт из слота
+local show_f=true
+local f2=true		-- флаг того,что надо поставить болт в слот
+local loot_window_open = false
+local restore_after_loot = false
+
+new_bolt_id = {}
+
+function on_item_take(obj)
+	if obj:section()=="fake_bolt" then
+	   bolt_cnt=bolt_cnt+1
+	   local bolt=db.actor:object("bolt")
+	   if bolt~=nil and db.actor:item_in_slot(5)==nil and f2 and not loot_window_open then
+		f2=false
+		db.actor:transfer_item(bolt,db.actor) remove_item(obj)
+	   end
+	end
+	if obj:section()=="bolt" and bolt_cnt>0 and f2 and not loot_window_open then
+		f2=false
+		db.actor:transfer_item(obj,db.actor)
+	end
+end
+
+function on_item_drop(obj)
+	if obj:section()=="fake_bolt" then
+		bolt_cnt=bolt_cnt-1
+	end
+end
+
+function on_actor_use(obj)
+	if obj:section()=="fake_bolt" and has_alife_info("ui_inventory") then
+		local bolt=db.actor:item_in_slot(5)
+		if bolt then
+			spawn_item_in_inv("fake_bolt")
+		else
+			db.actor:transfer_item(db.actor:object("bolt"),db.actor)
+		end
+	end
+end
+
+local function restore_bolt_after_loot()
+    if not restore_after_loot or loot_window_open or not db.actor then return end
+    if db.actor:item_in_slot(5) then
+        restore_after_loot=false
+        f2=false
+        return
+    end
+    local item=db.actor:object("fake_bolt")
+    if not item then restore_after_loot=false; return end
+    local bolt=db.actor:object("bolt")
+    if not bolt then return end
+    -- Сначала возвращаем кость в слот, затем списываем один предмет из запаса.
+    f2=false
+    local ok=pcall(function() db.actor:transfer_item(bolt,db.actor) end)
+    if not ok then f2=true; return end
+    restore_after_loot=false
+    remove_item(item)
+end
+
+function update()
+  restore_bolt_after_loot()
+
+  if new_bolt_id[1] and f then
+	f=false table.remove(new_bolt_id,1) return -- взяли болт в инвентарь
+  end
+
+  if db.actor:active_slot()==5 then
+ 	if level.main_input_receiver()==nil then show_static() else remove_static() end
+	if new_bolt_id[1] then
+
+		if bolt_in_hands_id then	-- болт2 висит в инвизе над ГГ
+			throwed_bolt_id = bolt_in_hands_id
+			bolt_binder.drop_bolt[throwed_bolt_id]=true
+			if not remove_item(db.actor:object("fake_bolt")) then bolt_cnt=bolt_cnt-1 del_bolt() end
+		end
+	
+		bolt_in_hands_id=new_bolt_id[1]
+		if f then bolt_in_hands_id=nil end
+
+		table.remove(new_bolt_id,1)
+	end
+  else
+	remove_static()
+  end
+
+end
+
+function remove_static()
+	if st then get_hud():RemoveDialogToRender(st) st=nil end
+end
+
+function show_static()
+if st then
+	st:SetText(bolt_cnt)
+else
+	bolt_cnt=0
+	db.actor:iterate_inventory(function(dummy,item) if item:section()=="fake_bolt" then bolt_cnt=bolt_cnt+1 end end,dummy)
+	if db.actor:item_in_slot(5) then bolt_cnt=bolt_cnt+1 end
+
+	st=CUIStatic()
+	st:Init(1024-160,768-65,110,50)	-- координаты где рисовать
+
+	st:SetFont(GetFontGraffiti32Russian())
+	st:SetTextAlign(CGameFont.alRight)
+	st:SetTextColor	(255,238,155,23)
+	st:SetTextY(15)	-- выравнивание по вертикали ,-1 по центру
+
+	local ini=system_ini() local sect="fake_bolt"
+	local x=ini:r_u32(sect, "inv_grid_x")*50
+ 	local y=ini:r_u32(sect, "inv_grid_y")*50
+	local width=ini:r_u32(sect, "inv_grid_width")*50
+ 	local height=ini:r_u32(sect, "inv_grid_height")*50
+	st:InitTexture("ui\\ui_icon_equipment")
+	st:SetOriginalRect(x,y,width,height)
+	--st:Show(true)
+	get_hud():AddDialogToRender(st)
+end
+end
+
+function on_info(info_id)
+    if info_id == "ui_car_body" or info_id == "ui_trade" then
+        if loot_window_open then return end
+        loot_window_open=true
+        restore_after_loot=false
+        if db.actor:item_in_slot(5) then
+            del_bolt()
+            spawn_item_in_inv("fake_bolt")
+        end
+    elseif info_id == "ui_car_body_hide" or info_id == "ui_trade_hide" then
+        if not loot_window_open then return end
+        loot_window_open=false
+        restore_after_loot=true
+        restore_bolt_after_loot()
+    end
+end
+
+function del_bolt()
+	-- спавним болт чтоб не было битья сейва
+	local npc=db.actor
+	alife():create("bolt", npc:position(),npc:level_vertex_id(),npc:game_vertex_id(), 0)
+	f=true f2=true
+	bolt_in_hands_id=nil
+	db.actor:transfer_item(db.actor:item_in_slot(5),level.object_by_id(box_id))
+end
+
+function net_spawn()
+	local sobj local string_sub=string.sub
+	local sim=alife()
+	local cnt=0
+	for i=1,65534 do	-- удаляем лишние бесхозные болты
+		sobj=sim:object(i)
+		if sobj then
+			if string_sub(sobj:name(),1,9)=="fake_bolt" and sobj.parent_id==65535 then
+				if cnt < max_cnt_bolt then cnt=cnt+1 else sim:release(sobj,true) end
+			end
+		end
+	end
+	sobj=sim:object("invis_rukzak_bolt")
+	if sobj then sim:release(sobj,true) end
+	sobj= sim:create("invis_rukzak_bolt",db.actor:position(), db.actor:level_vertex_id(), db.actor:game_vertex_id())
+	box_id=sobj.id
+	level.client_spawn_manager():add(sobj.id, 0, OnSpawnInvizRukzak,0)
+end
+
+function net_destroy()
+	loot_window_open=false
+	restore_after_loot=false
+	remove_static()
+end
+
+function OnSpawnInvizRukzak(arg, iId, gObj)
+	alife():set_switch_online  (box_id, true)
+	alife():set_switch_offline (box_id, false)
+	gObj:set_tip_text("")
+	gObj:set_nonscript_usable(false)
+end
+
+function remove_item(item)
+if item then
+	local sobj=alife():object(item:id())
+	if sobj then alife():release(sobj,true) end
+	return true
+end
+return false
+end
+
+function spawn_item_in_inv( sect )
+	alife():create(sect,db.actor:position(),db.actor:level_vertex_id(),db.actor:game_vertex_id(),0)
+end

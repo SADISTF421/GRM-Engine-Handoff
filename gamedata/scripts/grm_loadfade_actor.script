@@ -1,0 +1,99 @@
+-- Плавное появление изображения после появления игрока.
+-- Основной биндер и подключение звука остаются без замены.
+local installed = false
+local overlay = nil
+local pending = false
+local began = nil
+local previous = nil
+local waiting_since = nil
+local failed = false
+local HOLD_MS = 180
+local FADE_MS = 2200
+
+local function remove_overlay()
+    if overlay then
+        local old = overlay
+        overlay = nil
+        pcall(function() get_hud():RemoveDialogToRender(old) end)
+    end
+    pending = false
+    began = nil
+    previous = nil
+    waiting_since = nil
+end
+
+local function spawn()
+    remove_overlay()
+    failed = false
+    pending = true
+end
+
+local function frame(actor)
+    if not pending then return end
+    if not actor or not actor:alive() then remove_overlay(); return end
+    if not overlay and not failed then
+        local ok, result = pcall(function()
+            local wnd = CUIStatic()
+            wnd:Init(0, 0, 1024, 768)
+            wnd:SetStretchTexture(true)
+            wnd:InitTexture("ui\\grm_loadfade_white")
+            wnd:SetTextureColor(GetARGB(255, 0, 0, 0))
+            get_hud():AddDialogToRender(wnd)
+            return wnd
+        end)
+        if not ok or not result then failed = true; pending = false; return end
+        overlay = result
+    end
+    if not overlay then return end
+    -- Не тратим время эффекта, пока движок готовит кадры загрузки.
+    local now = time_global()
+    if not waiting_since or now < waiting_since then waiting_since = now end
+    if not app_ready() or device().precache_frame > 0 then
+        began = nil
+        if now - waiting_since > 15000 then remove_overlay() end
+        return
+    end
+    if not began or (previous and now < previous) then began = now end
+    previous = now
+    local t = math.max(0, math.min(1, (now - began - HOLD_MS) / FADE_MS))
+    local smooth = t * t * (3 - 2 * t)
+    if t >= 1 then remove_overlay(); return end
+    local alpha = math.floor(255 * (1 - smooth) + 0.5)
+    local ok = pcall(function() overlay:SetTextureColor(GetARGB(alpha, 0, 0, 0)) end)
+    if not ok then remove_overlay() end
+end
+
+local function install_hooks()
+    if installed then return end
+    local binder = bind_stalker.actor_binder
+    local old_spawn, old_update, old_destroy = binder.net_spawn, binder.update, binder.net_destroy
+    assert(type(old_spawn) == "function" and type(old_update) == "function" and type(old_destroy) == "function")
+    local ok, err = pcall(function()
+        binder.net_spawn = function(self, data)
+            local result = old_spawn(self, data)
+            if result ~= false then pcall(spawn) end
+            return result
+        end
+        binder.update = function(self, delta)
+            old_update(self, delta)
+            local ok = pcall(frame, self.object)
+            if not ok then pcall(remove_overlay) end
+        end
+        binder.net_destroy = function(self)
+            pcall(remove_overlay)
+            return old_destroy(self)
+        end
+    end)
+    if not ok then
+        pcall(function() binder.net_spawn = old_spawn; binder.update = old_update; binder.net_destroy = old_destroy end)
+        error(err)
+    end
+    installed = true
+end
+
+function actor_init(npc)
+    -- При ошибке эффекта игровой биндер и звуковая цепочка всё равно запускаются.
+    local ok, err = pcall(install_hooks)
+    if not ok then printf("[GRM_LOADFADE] hook error: %s", tostring(err)) end
+    grm_sound_actor.actor_init(npc)
+end

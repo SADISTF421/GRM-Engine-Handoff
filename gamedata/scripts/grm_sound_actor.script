@@ -1,0 +1,26 @@
+-- Не заменяет биндер: передаёт управление текущему bind_stalker.
+local attempted = false
+local function start_sound()
+    if attempted then return end
+    attempted = true
+    local ok, err = pcall(function()
+        if not package or type(package.loadlib) ~= "function" then
+            printf("[GRM_SOUND] Загрузка DLL недоступна")
+            return
+        end
+        local path = getFS():update_path("$game_data$", "plugins\\grm_sound\\grm_sound_occlusion.dll")
+        local load, why = package.loadlib(path, "luaopen_grm_sound_occlusion")
+        if not load then
+            printf("[GRM_SOUND] DLL не загружена: %s", tostring(why))
+            return
+        end
+        local code = load()
+        printf("[GRM_SOUND] Модуль: %s (1 = подключён)", tostring(code))
+    end)
+    if not ok then printf("[GRM_SOUND] Ошибка подключения: %s", tostring(err)) end
+end
+
+function actor_init(npc)
+    bind_stalker.actor_init(npc)
+    start_sound()
+end

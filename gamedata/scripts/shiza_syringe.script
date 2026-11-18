@@ -1,0 +1,264 @@
+-- Игровые userdata не сравниваем напрямую: у обёрток может не быть __eq.
+-- Для проверки владельца используем числовой ID; отмена операций — по поколению.
+local function same_actor(a,b)
+    return a and b and a:id()==b:id()
+end
+-- Механика шприца: реальное время, без нового урона и убийства игрока.
+-- Пять завершённых уколов за последние 40 секунд блокируют шприц на 30 секунд.
+-- Подключение через биндер и завершение анимации; повторный вызов не удваивает дозу.
+-- Состояние сохраняется в сейве; время вне запущенной игры не учитывается.
+local WITHDRAWAL_DELAY_MS = 480000
+local WITHDRAWAL_FADE_MS = 120000
+local RELIEF_FADE_MS = 2000
+local DOSE_WINDOW_MS = 40000
+local DOSES_FOR_OVERDOSE = 5
+local OVERDOSE_MS = 30000
+local WITHDRAWAL_PP = 7810 -- очистка старого эффекта; прямой LTX-эффектор использует 7813
+local OVERDOSE_PP = 7811
+local OVERDOSE_CAM = 7812
+-- Серость применяется через shiza_gray_ltx и отдельную секцию LTX.
+local OVERDOSE_FILE = "surge_shock.ppe"
+local OVERDOSE_CAMERA = "camera_effects\\broge3.anm"
+local OVERDOSE_SOUND = "affects\\panichka3"
+local actor_ref = nil
+local last_dose = nil
+local doses = {}
+local overdose_until = 0
+local withdrawal_enabled = false
+local withdrawal_factor = 0
+local relief_started = nil
+local relief_from = 0
+local overdose_enabled = false
+local panic_sound = nil
+local suspended = false
+local initialized = false
+local last_counted_at = nil
+local pending_snapshot = nil
+local STATE_KEY = "shiza_syringe_state_v1"
+local apply_snapshot
+
+local function stop_panic()
+    if panic_sound and panic_sound:playing() then panic_sound:stop() end
+    panic_sound = nil
+end
+local function clear_effects()
+    shiza_gray_ltx.reset()
+    if withdrawal_enabled then level.remove_pp_effector(WITHDRAWAL_PP) end
+    if overdose_enabled then level.remove_pp_effector(OVERDOSE_PP) end
+    level.remove_cam_effector(OVERDOSE_CAM)
+    withdrawal_enabled = false
+    withdrawal_factor = 0
+    overdose_enabled = false
+    stop_panic()
+end
+function reset()
+    clear_effects()
+    actor_ref = nil
+    last_dose = nil
+    doses = {}
+    overdose_until = 0
+    relief_started = nil
+    relief_from = 0
+    suspended = false
+    initialized = false
+    last_counted_at = nil
+    pending_snapshot = nil
+end
+function start_test()
+    local actor = db.actor
+    if not actor or not actor:alive() then return end
+    if same_actor(actor_ref,actor) and initialized and not pending_snapshot then return end
+    local saved = pending_snapshot
+    reset()
+    actor_ref = actor
+    initialized = true
+    shiza_gray_ltx.load_settings()
+    -- До первого завершённого укола отсчёт серости не начинается.
+    last_dose = nil
+    if saved then apply_snapshot(saved, time_global()) end
+end
+function is_syringe(section)
+    -- Старые секции поддерживаются для сейвов и не обходят блокировку.
+    return section == "medkit" or section == "medkit_army" or section == "medkit_scientic"
+end
+local function prune_doses(now)
+    local keep = {}
+    for _, at in ipairs(doses) do
+        if now - at <= DOSE_WINDOW_MS then keep[#keep + 1] = at end
+    end
+    doses = keep
+end
+function blocked_seconds()
+    if not same_actor(actor_ref,db.actor) then return 0 end
+    return math.max(0, math.ceil((overdose_until - time_global()) / 1000))
+end
+function can_use(section)
+    if not is_syringe(section) then return true end
+    start_test()
+    return not suspended and blocked_seconds() == 0
+end
+local function end_overdose()
+    if overdose_enabled then
+        level.remove_pp_effector(OVERDOSE_PP)
+        level.remove_cam_effector(OVERDOSE_CAM)
+        overdose_enabled = false
+        stop_panic()
+    end
+    overdose_until = 0
+end
+local function apply_overdose_effects(actor, play_intro)
+    level.add_pp_effector(OVERDOSE_FILE, OVERDOSE_PP, true)
+    level.set_pp_effector_factor(OVERDOSE_PP, 1.0)
+    overdose_enabled = true
+    -- Камера срабатывает один раз при начале передоза, но не при загрузке.
+    if play_intro then
+        level.add_cam_effector(OVERDOSE_CAMERA, OVERDOSE_CAM, false, "")
+    end
+    stop_panic()
+    panic_sound = xr_sound.get_safe_sound_object(OVERDOSE_SOUND)
+    if panic_sound then
+        panic_sound:play_at_pos(actor, vector():set(0,0,0), 0, sound_object.s2d)
+    end
+end
+local function start_overdose(actor, now)
+    overdose_until = now + OVERDOSE_MS
+    doses = {}
+    apply_overdose_effects(actor, true)
+end
+
+function on_injection_completed(section)
+    if not is_syringe(section) then return end
+    local actor = db.actor
+    if not actor or not actor:alive() then return end
+    start_test()
+    if suspended or blocked_seconds() > 0 then return end
+    local now = time_global()
+    -- Нативный обработчик и завершение анимации вызываются в одном кадре.
+    -- Анимация длится 4100 мс; этот фильтр убирает только повторный вызов.
+    if last_counted_at and now - last_counted_at < 250 then return end
+    last_counted_at = now
+    last_dose = now
+    relief_from = withdrawal_factor
+    relief_started = now
+    prune_doses(now)
+    doses[#doses + 1] = now
+    if #doses >= DOSES_FOR_OVERDOSE then start_overdose(actor, now) end
+end
+local function set_withdrawal(factor)
+    factor = math.max(0, math.min(1, factor))
+    shiza_gray_ltx.set_factor(factor)
+    withdrawal_enabled = factor > 0
+    withdrawal_factor = factor
+end
+
+function update()
+    local actor = db.actor
+    if not actor or not actor:alive() then
+        if actor_ref then reset() end
+        return
+    end
+    start_test()
+    -- Не вмешиваемся в существующие необратимые сцены радиации и водки.
+    if shiza_radiation.is_death_started() or shiza_vodka.is_death_started() then
+        if not suspended then clear_effects(); suspended = true end
+        return
+    end
+    if suspended then return end
+    local now = time_global()
+    if overdose_until > 0 then
+        if now >= overdose_until then
+            end_overdose()
+        elseif not overdose_enabled then
+            -- Возвращаем PPE и звук только на сохранённый остаток времени.
+            apply_overdose_effects(actor, false)
+        end
+    end
+    prune_doses(now)
+    local factor = 0
+    if last_dose then
+        factor = math.max(0, math.min(1,
+            (now - last_dose - WITHDRAWAL_DELAY_MS) / WITHDRAWAL_FADE_MS))
+    end
+    if relief_started then
+        local remaining = 1 - (now - relief_started) / RELIEF_FADE_MS
+        if remaining > 0 then factor = math.max(factor, relief_from * remaining)
+        else relief_started = nil end
+    end
+    set_withdrawal(factor)
+end
+
+-- Нативный обработчик: учитываем фактически применённый лечебный предмет.
+-- Обработчик анимации остаётся страховкой; повторный вызов отсекается.
+function on_engine_item_used(obj)
+    if obj and obj:section() == "medkit_usable" then
+        on_injection_completed("medkit")
+    end
+end
+
+
+-- Одна строка в штатном pstor: структура бинарного пакета не меняется.
+-- Храним длительности и возраст доз, а не абсолютный time_global().
+local function finite_number(text)
+    local n = tonumber(text)
+    if not n or n ~= n or n == math.huge or n == -math.huge then return nil end
+    return n
+end
+local function limited(n, lo, hi)
+    return math.max(lo, math.min(hi, n))
+end
+local function decode_state(text)
+    if type(text) ~= "string" or #text > 1024 then return nil end
+    local fields = {}
+    for token in string.gmatch(text, "[^|]+") do
+        local number = finite_number(token)
+        if not number then return nil end
+        fields[#fields + 1] = number
+    end
+    if #fields < 9 or fields[1] ~= 1 then return nil end
+    local count = fields[9]
+    if count < 0 or count > 4 or count ~= math.floor(count) or #fields ~= 9 + count then return nil end
+    return fields
+end
+apply_snapshot = function(saved, now)
+    if saved[2] == 1 then
+        last_dose = now - limited(saved[3], 0, WITHDRAWAL_DELAY_MS + WITHDRAWAL_FADE_MS)
+    end
+    local left = limited(saved[4], 0, OVERDOSE_MS)
+    overdose_until = left > 0 and now + left or 0
+    local relief_left = limited(saved[5], 0, RELIEF_FADE_MS)
+    relief_from = limited(saved[6], 0, 1)
+    if relief_left > 0 then relief_started = now - (RELIEF_FADE_MS - relief_left) end
+    local duplicate_age = limited(saved[7], 0, 250)
+    if duplicate_age < 250 then last_counted_at = now - duplicate_age end
+    -- Временная приостановка вычисляется по живым сценам, а не переносится из сейва.
+    suspended = false
+    doses = {}
+    for i = 1, saved[9] do
+        local age = saved[9 + i]
+        if age >= 0 and age <= DOSE_WINDOW_MS then doses[#doses + 1] = now - age end
+    end
+    -- Объекты эффектов не сериализуются: update() создаёт их заново.
+end
+function save_state(actor)
+    if not actor or not same_actor(db.actor,actor) then return end
+    start_test()
+    local now = time_global()
+    prune_doses(now)
+    local age = last_dose and limited(now - last_dose, 0,
+        WITHDRAWAL_DELAY_MS + WITHDRAWAL_FADE_MS) or 0
+    local relief_left = relief_started and
+        limited(RELIEF_FADE_MS - (now - relief_started), 0, RELIEF_FADE_MS) or 0
+    local duplicate_age = last_counted_at and limited(now - last_counted_at, 0, 250) or 250
+    local fields = {1, last_dose and 1 or 0, age,
+        limited(overdose_until - now, 0, OVERDOSE_MS), relief_left,
+        relief_from, duplicate_age, 0, #doses}
+    for _, dose_time in ipairs(doses) do fields[#fields + 1] = limited(now - dose_time, 0, DOSE_WINDOW_MS) end
+    local encoded = {}
+    for i, number in ipairs(fields) do encoded[i] = string.format("%.9g", number) end
+    xr_logic.pstor_store(actor, STATE_KEY, table.concat(encoded, "|"))
+end
+function queue_load_state(actor)
+    -- Актёр ещё может быть не зарегистрирован: применяем снимок на первом обновлении.
+    pending_snapshot = decode_state(xr_logic.pstor_retrieve(actor, STATE_KEY, ""))
+    if pending_snapshot then initialized = false end
+end

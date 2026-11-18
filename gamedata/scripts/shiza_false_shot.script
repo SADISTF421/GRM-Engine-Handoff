@@ -1,0 +1,73 @@
+-- Rare imaginary bullet whines. Test mode is enabled by default.
+local TEST_MODE = false -- Set to true for the short test intervals.
+local TEST_MIN_MS, TEST_MAX_MS = 20000, 40000
+local NORMAL_MIN_MS, NORMAL_MAX_MS = 600000, 1800000
+local RETRY_MS = 5000
+local SOUND_VOLUME = 0.7
+local SOUNDS = {
+    "shiza_false_shot\\whine_1",
+    "shiza_false_shot\\whine_2",
+    "shiza_false_shot\\whine_3",
+    "shiza_false_shot\\whine_4",
+    "shiza_false_shot\\whine_8"
+}
+local next_event = nil
+local actor_id = nil
+local current_sound = nil
+
+local function stop_sound()
+    if current_sound then pcall(function() current_sound:stop() end) end
+    current_sound = nil
+end
+
+local function schedule(now)
+    if TEST_MODE then
+        next_event = now + math.random(TEST_MIN_MS, TEST_MAX_MS)
+    else
+        next_event = now + math.random(NORMAL_MIN_MS, NORMAL_MAX_MS)
+    end
+end
+
+local function is_blocked(actor)
+    local ok, blocked = pcall(function()
+        return actor:is_talking() or actor:has_info("disabled_ui")
+            or (game and game.has_active_tutorial and game.has_active_tutorial())
+            or (shiza_hud_items and shiza_hud_items.is_using_item and shiza_hud_items.is_using_item())
+            or (shiza_radiation and shiza_radiation.is_death_started and shiza_radiation.is_death_started())
+            or (shiza_vodka and shiza_vodka.is_death_started and shiza_vodka.is_death_started())
+    end)
+    return not ok or blocked
+end
+
+function reset()
+    stop_sound()
+    next_event = nil
+    actor_id = nil
+end
+
+function update()
+    local actor = db.actor
+    if not actor or not actor:alive() then return end
+    local now = time_global()
+    if actor_id ~= actor:id() or not next_event then
+        stop_sound()
+        actor_id = actor:id()
+        schedule(now)
+        return
+    end
+    if now < next_event then return end
+    if is_blocked(actor) then next_event = now + RETRY_MS; return end
+
+    schedule(now)
+    stop_sound()
+    local path = SOUNDS[math.random(1, #SOUNDS)]
+    local ok, err = pcall(function()
+        current_sound = sound_object(path)
+        current_sound.volume = SOUND_VOLUME
+        current_sound:play_at_pos(actor, vector():set(0, 0, 0), 0, sound_object.s2d)
+    end)
+    if not ok then
+        stop_sound()
+        printf("[FALSE_SHOT] Failed to play %s: %s", path, tostring(err))
+    end
+end

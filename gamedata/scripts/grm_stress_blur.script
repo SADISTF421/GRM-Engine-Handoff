@@ -1,0 +1,64 @@
+-- Слабое экранное размытие только на время стресса.
+local EFFECT_ID = 99217
+local MAX_BLUR = 0.4
+local strength = 0
+local active = false
+local failed = false
+local native_ref = nil
+
+class "grm_stress_blur_effector" (effector)
+function grm_stress_blur_effector:__init()
+    super(EFFECT_ID, 1000000000)
+end
+function grm_stress_blur_effector:process(pp)
+    effector.process(self, pp)
+    pp.blur = MAX_BLUR * strength
+    pp.gray = 0
+    local dual = duality()
+    dual.h, dual.v = 0, 0
+    pp.dual = dual
+    local n = noise()
+    n.intensity, n.grain, n.fps = 0, 1, 30
+    pp.noise = n
+    local base = color()
+    base.r, base.g, base.b = 0.5, 0.5, 0.5
+    pp.color_base = base
+    local gray = color()
+    gray.r, gray.g, gray.b = 0.333, 0.333, 0.333
+    pp.color_gray = gray
+    local add = color()
+    add.r, add.g, add.b = 0, 0, 0
+    pp.color_add = add
+    return true
+end
+
+function reset()
+    strength = 0
+    if active then pcall(function() level.remove_pp_effector(EFFECT_ID) end) end
+    active = false
+    native_ref = nil
+end
+
+function update(stress, dt)
+    if failed then return end
+    dt = math.max(0, math.min(0.25, dt or 0))
+    if stress then
+        strength = math.min(1, strength + dt / 2.0)
+    else
+        strength = math.max(0, strength - dt / 1.5)
+    end
+    if strength <= 0 then
+        reset()
+    elseif not active then
+        local ok, err = pcall(function()
+            native_ref = grm_stress_blur_effector()
+            native_ref:start()
+            active = true
+        end)
+        if not ok then
+            reset()
+            failed = true
+            printf("[STRESS] Не удалось включить размытие: %s", tostring(err))
+        end
+    end
+end

@@ -1,0 +1,117 @@
+-- Дрожь HUD-модели оружия: камера и направление выстрела не меняются.
+local plugin, attempted, failed = nil, false, false
+local last_time, strength = nil, 0
+local diag_start, diag_reported, blocked_log = nil, false, 0
+local function setup()
+    if attempted then return plugin ~= nil end
+    attempted = true
+    local ok, result = pcall(function()
+        if not package or type(package.loadlib) ~= "function" then return nil end
+        local path = getFS():update_path("$game_data$", "plugins\\grm_hud_tremor\\grm_hud_tremor_v2.dll")
+        local loader, why = package.loadlib(path, "luaopen_grm_hud_tremor_v2")
+        if not loader then printf("[GRM_HUD_TREMOR] DLL не загружена: %s", tostring(why)); return nil end
+        local mod = loader()
+        if type(mod) ~= "table" or type(mod.install) ~= "function" or type(mod.set_offsets) ~= "function" or type(mod.get_hits) ~= "function" then
+            printf("[GRM_HUD_DIAG] Ошибка: DLL вернула неподходящий интерфейс")
+            return nil
+        end
+        if not mod.install() then printf("[GRM_HUD_TREMOR] Версия движка не совпадает; плагин отключён") ; return nil end
+        return mod
+    end)
+    if not ok then printf("[GRM_HUD_TREMOR] Ошибка запуска: %s", tostring(result)); return false end
+    plugin = result
+    if plugin then printf("[GRM_HUD_TREMOR] Оружейный HUD v2: перехват включён") end
+    return plugin ~= nil
+end
+local function stop()
+    strength, last_time = 0, nil
+    if plugin then pcall(plugin.set_offsets, 0, 0) end
+end
+function reset() stop() end
+local function blocked(a)
+    if not a or not a:alive() or a:is_talking() or a:has_info("disabled_ui") then return true end
+    if device().precache_frame > 0 then return true end
+    if game and game.has_active_tutorial and game.has_active_tutorial() then return true end
+    if shiza_hud_items and shiza_hud_items.is_using_item and shiza_hud_items.is_using_item() then return true end
+    if shiza_radiation and shiza_radiation.is_death_started and shiza_radiation.is_death_started() then return true end
+    if shiza_vodka and shiza_vodka.is_death_started and shiza_vodka.is_death_started() then return true end
+    if level.main_input_receiver and level.main_input_receiver() ~= nil then return true end
+    return false
+end
+local function step()
+    local a = db and db.actor
+    if blocked(a) then
+        if shiza_kill_stress and shiza_kill_stress.is_active and shiza_kill_stress.is_active() and blocked_log < 1 then
+            blocked_log = blocked_log + 1; printf("[GRM_HUD_TREMOR] Эффект временно заблокирован сценой или интерфейсом")
+        end
+        stop(); return
+    end
+    local item = a:active_item()
+    if not item or not isWeapon(item) then stop(); return end
+    local section = item:section() or ""
+    if section == "bolt" or section == "wpn_binoc" or section:find("knife",1,true) or section:find("grenade",1,true) then stop(); return end
+    -- Дрожь возникает только во время существующего приступа стресса.
+    local stress = shiza_kill_stress and shiza_kill_stress.is_active and shiza_kill_stress.is_active()
+    local target = stress and 0.0180 or 0
+    if target == 0 and not plugin then return end
+    if not setup() then return end
+    local now = time_global()
+    local dt = last_time and math.max(0, math.min(0.10, (now - last_time) / 1000)) or 0
+    last_time = now
+    local amount = 0.025 * dt
+    if strength < target then strength = math.min(target, strength + amount)
+    else strength = math.max(target, strength - amount) end
+    local t = now / 1000
+    local x = strength * (0.80 * math.sin(t * 7.1) + 0.20 * math.sin(t * 13.4))
+    local y = strength * (0.28 * math.sin(t * 8.7) + 0.12 * math.sin(t * 16.1))
+    plugin.set_offsets(x, y)
+    if stress and not diag_reported then
+        if not diag_start then diag_start = now end
+        if now - diag_start >= 3000 then
+            local ok, hits = pcall(plugin.get_hits)
+            printf("[GRM_HUD_TREMOR] HUD вызовов: %s, сила: %.4f", ok and tostring(hits) or "ошибка", strength)
+            diag_reported = true
+        end
+    end
+end
+-- Диагностика не создаёт эффекты и не вмешивается в работу оружия.
+local diag_ready, diag_active, diag_at, diag_count = false, false, 0, 0
+local function diagnostic()
+    local now = time_global()
+    if not diag_ready then
+        diag_ready = true
+        printf("[GRM_HUD_DIAG] Скрипт обновляется; диагностика запущена")
+    end
+    local stress_ok, stress = pcall(function()
+        return shiza_kill_stress and shiza_kill_stress.is_active and shiza_kill_stress.is_active()
+    end)
+    stress = stress_ok and stress == true
+    if stress ~= diag_active then
+        diag_active, diag_count, diag_at = stress, 0, 0
+        printf("[GRM_HUD_DIAG] Стресс: %s", tostring(stress))
+    end
+    if not stress or now < diag_at or diag_count >= 5 then return end
+    diag_count, diag_at = diag_count + 1, now + 3000
+    local actor_ok, actor = pcall(function() return db and db.actor end)
+    local item_ok, item = pcall(function() return actor and actor:active_item() end)
+    local section_ok, section = pcall(function() return item and item:section() end)
+    local weapon_ok, weapon = pcall(function() return item and isWeapon(item) end)
+    local block_ok, is_blocked = pcall(blocked, actor)
+    local hits_ok, hits = false, nil
+    if plugin and type(plugin.get_hits) == "function" then hits_ok, hits = pcall(plugin.get_hits) end
+    printf("[GRM_HUD_DIAG] actor=%s предмет=%s оружие=%s блок=%s DLL_попытка=%s DLL=%s вызовы_HUD=%s сила=%.4f ошибка=%s",
+        tostring(actor_ok and actor ~= nil), section_ok and tostring(section) or "ошибка",
+        weapon_ok and tostring(weapon) or "ошибка", block_ok and tostring(is_blocked) or "ошибка",
+        tostring(attempted), tostring(plugin ~= nil), hits_ok and tostring(hits) or "недоступно",
+        strength, tostring(failed))
+end
+function update()
+    if not failed then
+        local ok, err = pcall(step)
+        if not ok then
+            stop(); failed = true
+            printf("[GRM_HUD_TREMOR] Ошибка, эффект отключён: %s", tostring(err))
+        end
+    end
+    pcall(diagnostic)
+end

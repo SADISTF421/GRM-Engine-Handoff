@@ -1,0 +1,53 @@
+--- /data/grm_transfer_stage/02_versions/user_latest_scripts/scripts/bind_stalker.script
++++ /data/grm/v31/gamedata/scripts/bind_stalker.script
+@@ -437,10 +437,8 @@
+ end
+  
+ function actor_binder:save(packet)
+-    local function grm_save_probe(label)
+-        pcall(function() printf("[GRM_ACTOR_BYTES] %s %u", label, packet:w_tell()) end)
+-    end
+-    grm_save_probe("start")
++    pcall(function() sl_sidecar_manager.before_save() end)
++
+ 
+     pcall(function() shiza_skeleton_illusion.before_save() end)
+     pcall(function() shiza_bar_light_flicker.before_save() end)
+@@ -449,7 +447,7 @@
+ 	
+ 	printf("actor_binder:save(): self.object:name()='%s'", self.object:name())
+ 	object_binder.save(self, packet)
+-    grm_save_probe("binder")
++
+ 
+ 	 
+ 	if save_treasure_manager == true then
+@@ -474,22 +472,22 @@
+     shiza_kill_stress.save_state(self.object)
+     shiza_syringe.save_state(self.object)
+ 	xr_logic.pstor_save_all(self.object, packet)
+-    grm_save_probe("pstor")
++
+ 	self.weather_manager:save(packet)
+-    grm_save_probe("weather")
++
+ 
+ 	sr_psy_antenna.save( packet )
+-    grm_save_probe("antenna")
++
+ 	
+ 	if save_treasure_manager == true then
+ 		treasure_manager.save(packet)
+-    grm_save_probe("treasure")      
++      
+ 	end                                  
+ 
+ 	task_manager.save(packet)
+-    grm_save_probe("tasks")
++
+ 	self.actor_detector:save(packet)
+-    grm_save_probe("detector")	
++	
+ end
+  
+ function actor_binder:load(reader)

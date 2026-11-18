@@ -1,0 +1,197 @@
+-- Настройки визуальных реакций: true — включено, false — выключено.
+local settings = {
+    impact = true,             -- реакция по месту попадания
+    head_kill = true,          -- усиление при смертельном попадании в голову
+    wounded = true,            -- короткое кровотечение тяжелораненого
+    distance = 30,             -- максимальная дистанция от игрока, метры
+    hit_interval = 250,        -- интервал эффектов попадания, мс
+    wound_interval = 1800,     -- интервал капель у раненого, мс
+    wound_duration = 10000,    -- максимальная длительность, мс
+    wound_health = 0.45,       -- порог здоровья раненого
+    wound_count = 4,           -- не более четырёх всплесков на ранение
+    kill_window = 1200,        -- связь попадания и смерти, мс
+    burst_window = 500,        -- серия близких попаданий, мс
+    burst_hits = 3,            -- сколько попаданий образуют серию
+    burst_cooldown = 1600,     -- защита от непрерывного спама
+    wound_limit = 3,           -- не более трёх разных ран одновременно
+    wound_critical = 0.20,     -- тяжёлая рана: чаще, но ограниченно
+    wound_healed = 0.70,       -- прекращаем визуальное кровотечение при лечении
+    wound_global_interval = 140 -- общий предел частоты для всех NPC, мс
+}
+
+local last_bleed_time = nil
+
+local bone_names = {
+    {"bip01_head", "head"},
+    {"bip01_neck", "head"},
+    {"bip01_spine", "body"},
+    {"bip01_spine1", "body"},
+    {"bip01_spine2", "body"},
+    {"bip01_pelvis", "body"},
+    {"bip01_l_upperarm", "limb"},
+    {"bip01_l_forearm", "limb"},
+    {"bip01_l_hand", "limb"},
+    {"bip01_r_upperarm", "limb"},
+    {"bip01_r_forearm", "limb"},
+    {"bip01_r_hand", "limb"},
+    {"bip01_l_thigh", "limb"},
+    {"bip01_l_calf", "limb"},
+    {"bip01_l_foot", "limb"},
+    {"bip01_r_thigh", "limb"},
+    {"bip01_r_calf", "limb"},
+    {"bip01_r_foot", "limb"}
+}
+local effects = {
+    body = "hit_fx\\group_items\\hit_blood_drops_01",
+    limb = "hit_fx\\group_items\\hit_blood_drops_02",
+    head = "hit_fx\\group_items\\hit_blood_drops_headshoot_00"
+}
+
+-- Неподдерживаемые кости пропускаются, без подстановки позиции живота.
+local function bone_for(obj, bone_index)
+    local index = tonumber(bone_index)
+    if not index or index < 0 or index >= 65535 then return nil end
+    for _, entry in ipairs(bone_names) do
+        local ok, id = pcall(function() return obj:get_bone_id(entry[1]) end)
+        id = ok and tonumber(id) or nil
+        if id and id >= 0 and id < 65535 and id == index then
+            return entry[1], entry[2]
+        end
+    end
+    return nil
+end
+
+local function actor_shot(who)
+    if not who or not db or not db.actor then return false end
+    local ok, valid = pcall(function()
+        if who:id() ~= db.actor:id() then return false end
+        local weapon = db.actor:active_item()
+        if not weapon then return false end
+        local section = weapon:section()
+        return type(section) == "string" and string.sub(section, 1, 4) == "wpn_"
+            and not string.find(section, "knife", 1, true)
+    end)
+    return ok and valid == true
+end
+
+local function nearby(obj)
+    local ok, near = pcall(function()
+        if not db or not db.actor then return false end
+        local a, b = db.actor:position(), obj:position()
+        local x, y, z = a.x-b.x, a.y-b.y, a.z-b.z
+        return x*x+y*y+z*z <= settings.distance*settings.distance
+    end)
+    return ok and near == true
+end
+
+local function play(obj, bone, effect)
+    if not nearby(obj) then return false end
+    local ok = pcall(function()
+        local point = obj:bone_position(bone)
+        if not point then return end
+        local pos = vector():set(point.x, point.y, point.z)
+        grm_gore_test.particle_at(effect, pos)
+    end)
+    return ok
+end
+
+-- Храним данные только в памяти текущего NPC: в сохранение они не записываются.
+function on_hit(binder, amount, who, bone_index)
+    if not binder or not binder.object or not tonumber(amount) or amount <= 0 then return end
+    if not actor_shot(who) then return end
+    local obj = binder.object
+    local bone, part = bone_for(obj, bone_index)
+    if not bone then return end
+    local now = time_global()
+    local s = binder.grm_painter_state or {}
+    binder.grm_painter_state = s
+    s.last_bone, s.last_part, s.hit_time = bone, part, now
+    -- Учитываем серию попаданий; она не изменяет урон и не определяет тип боеприпаса.
+    if not s.burst_start or now < s.burst_start or now - s.burst_start > settings.burst_window then
+        s.burst_start, s.burst_count = now, 0
+    end
+    s.burst_count = s.burst_count + 1
+    if part ~= "head" and s.burst_count >= settings.burst_hits
+        and (not s.burst_fx or now < s.burst_fx or now - s.burst_fx >= settings.burst_cooldown) then
+        s.burst_fx = now
+        play(obj, bone, effects.limb)
+    end
+    -- Несколько независимых ран на разных костях; старая заменяется последней.
+    if part ~= "head" then
+        s.wounds = s.wounds or {}
+        local found = nil
+        for _, wound in ipairs(s.wounds) do
+            if wound.bone == bone then found = wound; break end
+        end
+        if not found then
+            if #s.wounds >= settings.wound_limit then table.remove(s.wounds, 1) end
+            found = {bone = bone, part = part}
+            table.insert(s.wounds, found)
+        end
+        found.until_time = now + settings.wound_duration
+        found.next_time = now + settings.wound_interval
+        found.left = settings.wound_count
+    end
+    if settings.impact and part ~= "head" and (not s.last_fx or now-s.last_fx >= settings.hit_interval) then
+        s.last_fx = now
+        play(obj, bone, effects[part])
+    end
+end
+
+-- Усиление включается только когда смерть связана с недавним попаданием игрока.
+function on_death(binder, who)
+    if not binder or not binder.object then return end
+    local s = binder.grm_painter_state
+    binder.grm_painter_state = nil
+    if not s then return end
+    if not who or not db or not db.actor then return end
+    local ok, same = pcall(function() return who:id() == db.actor:id() end)
+    if not ok or not same then return end
+    local elapsed = time_global()-s.hit_time
+    if elapsed < 0 or elapsed > settings.kill_window then return end
+    if settings.head_kill and s.last_part == "head" then
+        play(binder.object, s.last_bone, effects.head)
+    elseif s.last_part ~= "head" and s.burst_count and s.burst_count >= settings.burst_hits then
+        -- Дополнительные капли при смерти после серии попаданий, без облака в голову.
+        play(binder.object, s.last_bone, effects.limb)
+    end
+end
+
+-- Одновременно проверяется не более трёх ран; за один вызов запускается один эффект.
+function update(binder)
+    if not binder or not binder.object then return end
+    local s = binder.grm_painter_state
+    if not s or not settings.wounded or not s.wounds then return end
+    local now = time_global()
+    local obj = binder.object
+    local ok, alive, hp = pcall(function() return obj:alive(), obj.health end)
+    if not ok or not alive then s.wounds = nil; return end
+    if type(hp) ~= "number" then return end
+    -- Лечение гасит старые раны; эффект не меняет здоровье и сохранение.
+    if hp >= settings.wound_healed then s.wounds = nil; return end
+    if last_bleed_time and now < last_bleed_time then last_bleed_time = nil end
+    local i = 1
+    while i <= #s.wounds do
+        local wound = s.wounds[i]
+        if now > wound.until_time or wound.left <= 0 then
+            table.remove(s.wounds, i)
+        elseif now >= wound.next_time then
+            if hp <= settings.wound_health then
+                -- У тяжелораненого капли чаще, но общее количество ограничено.
+                if last_bleed_time and now-last_bleed_time < settings.wound_global_interval then return end
+                local interval = hp <= settings.wound_critical and 1200 or settings.wound_interval
+                wound.next_time = now + interval
+                wound.left = wound.left - 1
+                last_bleed_time = now
+                play(obj, wound.bone, effects[wound.part])
+                break
+            else
+                wound.next_time = now + settings.wound_interval
+                i = i + 1
+            end
+        else
+            i = i + 1
+        end
+    end
+    if #s.wounds == 0 then s.wounds = nil end
+end

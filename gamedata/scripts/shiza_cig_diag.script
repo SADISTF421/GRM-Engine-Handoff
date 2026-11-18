@@ -1,0 +1,15 @@
+-- Quiet production diagnostics. Never send fake commands to the console.
+-- Keep genuine lighter failure messages; FX/tip already report their own errors.
+local reported = {}
+function write(text)
+    local s = tostring(text)
+    if s:sub(1,6) ~= "light_" then return true end
+    local failure = s:find("failed",1,true) or s:find("missing",1,true)
+        or s:find("unavailable",1,true) or s:find("did not appear",1,true)
+    if not failure or reported[s] then return true end
+    reported[s] = true
+    if type(printf) == "function" then
+        pcall(printf, "[shiza_cigarette_error] %s", s)
+    end
+    return true
+end

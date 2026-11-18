@@ -1,0 +1,62 @@
+[
+  {
+    "old": "796b2db67e21ec231fb7455f09da9e0bcabb03b9550aeea663b96d411c8946e9",
+    "new": "1991e2d5aef2fc382afa851751ab7ad2256e0e725a7ef68bde65ce3ff4d182b6",
+    "file": "100_popup_old.script"
+  },
+  {
+    "old": "f4904a34ac1e79b285f03ff6427df45dd237c989012a16455411566229c53151",
+    "new": "92321efd1f41cedb57218b59001bf9bdd63e8eb5dd4a724dd8ae69acaa37f1ee",
+    "file": "50_popup_old.script"
+  },
+  {
+    "old": "bbab0c15788ddceab6c87128cc11bba61cb107829425e0e006da46898826af2d",
+    "new": "1991e2d5aef2fc382afa851751ab7ad2256e0e725a7ef68bde65ce3ff4d182b6",
+    "file": "100_quiet_old.script"
+  },
+  {
+    "old": "62a9340cedda07264ec8696078407ff5f53071993ba716e6b9c82252640b55dc",
+    "new": "92321efd1f41cedb57218b59001bf9bdd63e8eb5dd4a724dd8ae69acaa37f1ee",
+    "file": "50_quiet_old.script"
+  },
+  {
+    "old": "9d010f7adce860dad994b19c54789a5ea46979e25c7dbc29ec117f6a70594bfd",
+    "new": "e89e1f29d3c29181caa468b7ed26630c6f933d8b95fc069f81fbeb8a9026a2f6",
+    "file": "100_corpse_old.script"
+  },
+  {
+    "old": "db46e6f60adb172a1ad6d4bb75d1b1625bfc87a15e15074b742a7dd78820025f",
+    "new": "cc8c2de14433ff926ad7631ac99ba4fe84a1ae5455f8def0e9685c1d3c46fac7",
+    "file": "50_corpse_old.script"
+  },
+  {
+    "old": "e295e303a9d838afa67ef1fd8eed5183f05819b8d4c460016dcd21e95f24d2c9",
+    "new": "e89e1f29d3c29181caa468b7ed26630c6f933d8b95fc069f81fbeb8a9026a2f6",
+    "file": "100ms_corpse_transition.script"
+  },
+  {
+    "old": "c0fbed884abc839dd4856082fd287141d4aebd04cd061a220ef196bbcb25e0a8",
+    "new": "1991e2d5aef2fc382afa851751ab7ad2256e0e725a7ef68bde65ce3ff4d182b6",
+    "file": "100ms_popup_transition.script"
+  },
+  {
+    "old": "da4fa7f017f0aca7af1aca8577f75be9d72d9b9f804b97b65f53cfcc1cf2d851",
+    "new": "1991e2d5aef2fc382afa851751ab7ad2256e0e725a7ef68bde65ce3ff4d182b6",
+    "file": "100ms_quiet_transition.script"
+  },
+  {
+    "old": "9f8674b9f4f9e2d90ac7cb5cc3fc98e363f1f6f7181cc2653918289804232b77",
+    "new": "cc8c2de14433ff926ad7631ac99ba4fe84a1ae5455f8def0e9685c1d3c46fac7",
+    "file": "50ms_corpse_transition.script"
+  },
+  {
+    "old": "14af0a7b3399f54c980a1dc211b206342f4b2acf46d95c48315d84a015ca1c13",
+    "new": "92321efd1f41cedb57218b59001bf9bdd63e8eb5dd4a724dd8ae69acaa37f1ee",
+    "file": "50ms_popup_transition.script"
+  },
+  {
+    "old": "1191db234c19ea11dc9a33d89374c3984a88d576772699cccc1b2e3199ba14d6",
+    "new": "92321efd1f41cedb57218b59001bf9bdd63e8eb5dd4a724dd8ae69acaa37f1ee",
+    "file": "50ms_quiet_transition.script"
+  }
+]

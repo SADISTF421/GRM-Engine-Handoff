@@ -1,0 +1,350 @@
+-- Эксперимент: обезглавливание при смертельном попадании игрока.
+local bridge, attempted, last_weapon = nil, false, nil
+local shotguns = {
+    wpn_bm16 = true, wpn_toz34 = true, wpn_spas12 = true,
+    wpn_wincheaster1300 = true, wpn_protecta = true, wpn_striker = true,
+    wpn_spas12_m1 = true, wpn_winchester_m1 = true,
+    wpn_toz34_arena = true, wpn_spas12_arena = true,
+    wpn_bm16_arena = true, hunters_toz = true
+}
+local rifles = {wpn_svd = true, wpn_svu = true, wpn_svd_m1 = true}
+-- Подробные сообщения включаются только на время диагностики.
+local GORE_DEBUG = false
+local reported_errors = {}
+local function notice(text)
+    local message = tostring(text)
+    local is_error = message:find("FAIL", 1, true) or message:find("ERROR", 1, true)
+    if not GORE_DEBUG and not is_error then return end
+    if not GORE_DEBUG then
+        local key = message:match("^[^ ]+ [^ ]+") or message
+        if reported_errors[key] then return end
+        reported_errors[key] = true
+    end
+    pcall(function() if type(printf) == "function" then printf("[GRM_GORE] %s", message) end end)
+end
+local function setup()
+    if not attempted then
+        attempted = true
+        notice("ENGINE BONE MODE")
+    end
+    return true
+end
+-- Секции из установленной конфигурации; класс дробовика учитывает наследников.
+local function actor_weapon(who)
+    local ok, kind, section = pcall(function()
+        if not who or not db or not db.actor or who:id() ~= db.actor:id() then return nil, nil end
+        local item = db.actor:active_item()
+        if not item then return nil, "NO ACTIVE ITEM" end
+        local name = item:section()
+        if shotguns[name] then return "shotgun", name end
+        if rifles[name] then return "rifle", name end
+        local ini = system_ini()
+        if ini and ini:line_exist(name, "weapon_class") and ini:r_string(name, "weapon_class") == "shotgun" then
+            return "shotgun", name
+        end
+        return nil, name
+    end)
+    if not ok then return nil, "WEAPON API ERROR" end
+    return kind, section
+end
+-- Проверка прицела применяется только если движок не сообщил смертельную кость.
+-- Это приближение: пуля или дробина может отклониться от линии камеры.
+local function aim_near_head(obj)
+    local ok, matched, error_m = pcall(function()
+        local d = device()
+        local camera, direction = d.cam_pos, d.cam_dir
+        local head = obj:bone_position("bip01_head")
+        if not camera or not direction or not head then return false, -1 end
+        local dx, dy, dz = direction.x, direction.y, direction.z
+        local norm2 = dx*dx + dy*dy + dz*dz
+        if norm2 < 0.25 or norm2 > 4 then return false, -1 end
+        local x, y, z = head.x-camera.x, head.y-camera.y, head.z-camera.z
+        local along = (x*dx + y*dy + z*dz) / norm2
+        if along <= 0 or along*along*norm2 > 300*300 then return false, -1 end
+        local px, py, pz = x-along*dx, y-along*dy, z-along*dz
+        local error2 = px*px + py*py + pz*pz
+        if error2 ~= error2 then return false, -1 end
+        return error2 <= 0.22*0.22, math.sqrt(error2)
+    end)
+    if not ok then return false, -1 end
+    return matched, error_m
+end
+-- До выстрела запоминаем прицел на живой цели. Это не точная кость пули.
+local function track_aim(binder, obj, now)
+    if binder.grm_gore_aim_next and now >= binder.grm_gore_aim_next - 100
+        and now < binder.grm_gore_aim_next then return end
+    binder.grm_gore_aim_next = now + 100
+    local kind, section = actor_weapon(db and db.actor)
+    if not kind then binder.grm_gore_aim = nil; return end
+    local ok, nearby = pcall(function()
+        local d, root = device(), obj:position()
+        local c, v = d.cam_pos, d.cam_dir
+        local norm2 = v.x*v.x + v.y*v.y + v.z*v.z
+        if norm2 < 0.25 or norm2 > 4 then return false end
+        local x, y, z = root.x-c.x, root.y-c.y, root.z-c.z
+        local along = (x*v.x+y*v.y+z*v.z)/norm2
+        if along <= 0 or along*along*norm2 > 300*300 then return false end
+        local px, py, pz = x-along*v.x, y-along*v.y, z-along*v.z
+        return px*px+py*py+pz*pz <= 2.5*2.5
+    end)
+    if not ok or not nearby then binder.grm_gore_aim = nil; return end
+    if not setup() then binder.grm_gore_aim = nil; return end
+    local found, id = pcall(function() return obj:bone_position("__grm_test_head_id__").x end)
+    id = found and tonumber(id) or nil
+    if not id or id < 0 or id >= 1024 then binder.grm_gore_aim = nil; return end
+    local near, error_m = aim_near_head(obj)
+    if near then
+        binder.grm_gore_aim = {time = now, section = section, map = level.name(), error_m = error_m}
+    else
+        binder.grm_gore_aim = nil
+    end
+end
+-- Четыре варианта одного звука; предыдущий вариант сразу не повторяется.
+local head_sounds, last_head_sound = {}, nil
+local function play_head_sound(corpse)
+    pcall(function()
+        local neck = corpse:bone_position("bip01_neck")
+        if not neck then return end
+        local pos = vector():set(neck.x, neck.y, neck.z)
+        local index = math.random(1, 4)
+        if index == last_head_sound then index = index % 4 + 1 end
+        local snd = head_sounds[index]
+        if not snd then
+            snd = sound_object("grm_gore_head\\tear_0" .. tostring(index))
+            head_sounds[index] = snd
+        end
+        if snd then
+            last_head_sound = index
+            snd:play_at_pos(corpse, pos, 0, sound_object.s3d)
+        end
+    end)
+end
+
+-- Обёртки частиц удерживаются до очистки движком при смене уровня.
+-- Повторно используем только частицы текущего экземпляра игрока и уровня.
+-- У каждой частицы одна сильная ссылка; работающие частицы не уничтожаются.
+local particle_pool = {}
+local particle_actor, particle_level, particle_sweep = nil, nil, 0
+local particle_limits = {
+    ["grm_restore\\suicide_backup_head"] = 8,
+    ["hit_fx\\group_items\\hit_blood_puff_head"] = 32,
+    ["hit_fx\\group_items\\hit_blood_drops_headshoot_00"] = 16,
+    ["hit_fx\\group_items\\hit_blood_drops_headshoot_01"] = 16,
+    ["hit_fx\\group_items\\hit_blood_drops_01"] = 16,
+    ["hit_fx\\group_items\\hit_blood_drops_02"] = 16
+}
+local function particle_sync()
+    local actor = db and db.actor
+    if not actor then return false end
+    local map = level.name()
+    if not rawequal(actor, particle_actor) or map ~= particle_level then
+        -- Старые объекты нельзя опрашивать после выгрузки карты.
+        particle_pool = {}
+        particle_actor, particle_level, particle_sweep = actor, map, 0
+    end
+    return true
+end
+local function particle_cleanup(now)
+    if not particle_sync() then return end
+    if now >= particle_sweep and now < particle_sweep + 2000 then return end
+    particle_sweep = now
+    for effect, pool in pairs(particle_pool) do
+        for i = #pool, 1, -1 do
+            local entry = pool[i]
+            if (now < entry.started or now - entry.started >= 10000) and not entry.fx:playing() then
+                table.remove(pool, i)
+            end
+        end
+        if #pool == 0 then particle_pool[effect] = nil end
+    end
+end
+function particle_at(effect, pos)
+    if not pos or not particle_sync() then return false end
+    local now = time_global()
+    local pool = particle_pool[effect]
+    if not pool then pool = {}; particle_pool[effect] = pool end
+    local entry = nil
+    for _, candidate in ipairs(pool) do
+        if not candidate.fx:playing() then entry = candidate; break end
+    end
+    if not entry and #pool < (particle_limits[effect] or 0) then
+        local fx = particles_object(effect)
+        if fx then entry = {fx = fx, started = now}; pool[#pool + 1] = entry end
+    end
+    if not entry then return false end
+    entry.started = now
+    entry.fx:play_at_pos(pos)
+    return true
+end
+local function play_particle(npc, effect)
+    local ok, err = pcall(function()
+        local neck = npc:bone_position("bip01_neck")
+        if not neck then return end
+        particle_at(effect, vector():set(neck.x, neck.y, neck.z))
+    end)
+    if not ok then notice("PARTICLE ERROR " .. tostring(err)) end
+end
+local function schedule_hide(binder)
+    if binder.grm_gore_pending or binder.grm_gore_anchored then return end
+    local obj = binder.object
+    binder.grm_gore_pending = {
+        id = obj:id(), name = obj:name(), map = level.name(), started = time_global()
+    }
+end
+function hit(binder, amount, who, bone)
+    if not binder or not binder.object then return end
+    local kind, section = actor_weapon(who)
+    if section and section ~= last_weapon then
+        last_weapon = section
+        notice("WEAPON " .. tostring(section) .. " " .. tostring(kind or "UNSUPPORTED"))
+    end
+    if not kind then binder.grm_gore_test = nil; binder.grm_gore_aim = nil; return end
+    local damage = tonumber(amount)
+    if not damage or damage <= 0 then return end
+    if not setup() then binder.grm_gore_test = nil; return end
+    local obj = binder.object
+    local ok, id = pcall(function() return obj:bone_position("__grm_test_head_id__").x end)
+    id = ok and tonumber(id) or nil
+    if not id or id < 0 or id >= 1024 then
+        binder.grm_gore_test = nil
+        notice("BONE LOOKUP FAIL")
+        return
+    end
+    -- Последнее подтверждённое попадание в тело отменяет попадание в голову.
+    local target = binder.object
+    local id_ok, who_id = pcall(function() return who:id() end)
+    if not id_ok then binder.grm_gore_test = nil; return end
+    binder.grm_gore_test = {
+        time = time_global(), who = who_id, npc = target:id(), kind = kind,
+        section = section, head = tonumber(bone) == id
+    }
+    if tonumber(bone) ~= id then binder.grm_gore_aim = nil end
+end
+-- Для трупов учитываем только попадание игрока в кость головы.
+function corpse_hit(binder, who, bone)
+    if not binder or not binder.object or binder.object:alive() then return end
+    if binder.grm_gore_pending or binder.grm_gore_anchored then return end
+    local kind, section = actor_weapon(who)
+    if not kind or not setup() then return end
+    local ok, id = pcall(function() return binder.object:bone_position("__grm_test_head_id__").x end)
+    id = ok and tonumber(id) or nil
+    if not id or id < 0 or id >= 64 or tonumber(bone) ~= id then return end
+    if math.random(1, 100) > 75 then
+        notice("CORPSE CHANCE SKIPPED")
+        return
+    end
+    notice("CORPSE HEAD HIT " .. tostring(section))
+    schedule_hide(binder)
+end
+function death(binder, who)
+    if not binder or not binder.object then return end
+    local record = binder.grm_gore_test
+    local saved_aim = binder.grm_gore_aim
+    binder.grm_gore_test = nil
+    binder.grm_gore_aim = nil
+    local kind, section = actor_weapon(who)
+    if section and section ~= last_weapon then
+        last_weapon = section
+        notice("WEAPON " .. tostring(section) .. " " .. tostring(kind or "UNSUPPORTED"))
+    end
+    if not kind then return end
+    if not setup() then return end
+    local who_ok, who_id = pcall(function() return who:id() end)
+    if not who_ok then return end
+    local now = time_global()
+    local recent = record and record.who == who_id and record.npc == binder.object:id()
+        and record.section == section and now >= record.time and now - record.time <= 300
+    -- Достоверное попадание в тело не заменяется старым результатом прицеливания.
+    if recent and not record.head then return end
+    local is_head = recent and record.head
+    local route = "HIT"
+    if not is_head and saved_aim and saved_aim.section == section
+        and saved_aim.map == level.name() and now >= saved_aim.time and now - saved_aim.time <= 350 then
+        is_head = true
+        route = "PRE-AIM"
+        notice(string.format("PRE-AIM %.2fm", saved_aim.error_m))
+    end
+    if not is_head then
+        -- Не обращаемся к имени кости напрямую, пока плагин не проверил её наличие.
+        local ok, head_id = pcall(function() return binder.object:bone_position("__grm_test_head_id__").x end)
+        head_id = ok and tonumber(head_id) or nil
+        if not head_id or head_id < 0 or head_id >= 1024 then notice("BONE LOOKUP FAIL"); return end
+        local near, error_m = aim_near_head(binder.object)
+        if not near then
+            if error_m >= 0 then
+                notice(string.format("AIM MISS %.2fm %s", error_m, tostring(section)))
+            else
+                notice("AIM CHECK FAILED " .. tostring(section))
+            end
+            return
+        end
+        route = "AIM"
+        notice(string.format("HEAD AIM %.2fm", error_m))
+    end
+    -- Один случайный выбор на весь эффект: скрытие, мясо, кровь и звук.
+    if math.random(1, 100) > 75 then notice("CHANCE SKIPPED " .. route); return end
+    notice("CHANCE SELECTED " .. route)
+    schedule_hide(binder)
+end
+-- Видимость кости обрабатывает движок; кровь и задержки временные.
+-- Попадания по трупам проверяются отдельно.
+function update(binder)
+    if not binder or not binder.object then return end
+    local obj = binder.object
+    local stamp = time_global()
+    local clean_ok, clean_err = pcall(particle_cleanup, stamp)
+    if not clean_ok then notice("PARTICLE ERROR " .. tostring(clean_err)) end
+    if obj:alive() then
+        local record = binder.grm_gore_test
+        if record and (stamp < record.time or stamp - record.time > 300) then binder.grm_gore_test = nil end
+        track_aim(binder, obj, stamp)
+        binder.grm_gore_pending = nil
+        binder.grm_gore_anchored = nil
+        binder.grm_gore_refresh = nil
+        binder.grm_gore_map = nil
+        binder.grm_gore_blood = nil
+        return
+    end
+    local now = time_global()
+    local pending = binder.grm_gore_pending
+    if pending then
+        if level.name() ~= pending.map or now < pending.started then
+            binder.grm_gore_pending = nil
+        elseif now - pending.started >= 50 then
+            binder.grm_gore_pending = nil
+            local ok, result = pcall(function()
+                local corpse = level.object_by_id(pending.id)
+                if not corpse or corpse:name() ~= pending.name or corpse:alive() then return nil end
+                return corpse:bone_position("__grm_test_hide_head__").x
+            end)
+            if ok and result == 1 then
+                binder.grm_gore_anchored = true
+                binder.grm_gore_map = pending.map
+                binder.grm_gore_refresh = now
+                play_head_sound(obj)
+                play_particle(obj, "grm_restore\\suicide_backup_head")
+                binder.grm_gore_blood = {started = now, map = pending.map, next = 1}
+                notice("HEAD HIDDEN")
+            else
+                notice("HEAD HIDE FAILED")
+            end
+        end
+    elseif binder.grm_gore_anchored and binder.grm_gore_map ~= level.name() then
+        binder.grm_gore_anchored = nil
+        binder.grm_gore_refresh = nil
+        binder.grm_gore_map = nil
+        binder.grm_gore_blood = nil
+    end
+    local blood = binder.grm_gore_blood
+    if blood then
+        if level.name() ~= blood.map or now < blood.started then
+            binder.grm_gore_blood = nil
+        else
+            while blood.next <= 10 and now - blood.started >= blood.next * 500 do
+                play_particle(obj, "hit_fx\\group_items\\hit_blood_puff_head")
+                blood.next = blood.next + 1
+            end
+            if blood.next > 10 then binder.grm_gore_blood = nil end
+        end
+    end
+end

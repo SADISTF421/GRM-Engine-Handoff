@@ -1,0 +1,578 @@
+ 
+
+
+
+
+
+
+
+
+memtsg = {}  
+lasthealth = 0
+lastime = nil
+
+ 
+ 
+local SHIZA_GORE_HEAD_BONE = "bip01_head"
+local SHIZA_GORE_DEATH_WINDOW = 1200
+local shiza_gore_api_warning_printed = false
+local shiza_gore_particle_warning_printed = false
+
+ 
+local function shiza_gore_get_bone_id(obj, bone_name)
+    local ok, bone_id = pcall(function()
+        return obj:get_bone_id(bone_name)
+    end)
+    if not ok or bone_id == nil then
+        ok, bone_id = pcall(function()
+            return obj:bone_id(bone_name)
+        end)
+    end
+    if not ok then return nil end
+    bone_id = tonumber(bone_id)
+    if bone_id == nil or bone_id < 0 then return nil end
+    return bone_id
+end
+
+ 
+local function shiza_gore_get_head_position(obj)
+    local ok, pos = pcall(function()
+        local bone_pos = obj:bone_position(SHIZA_GORE_HEAD_BONE)
+        if bone_pos == nil then return nil end
+        return vector():set(bone_pos.x, bone_pos.y, bone_pos.z)
+    end)
+    if ok and pos ~= nil then return pos end
+
+    local pos_ok, root_pos = pcall(function()
+        local base_pos = obj:position()
+        if base_pos == nil then return nil end
+        return vector():set(base_pos.x, base_pos.y + 1.5, base_pos.z)
+    end)
+    if pos_ok and root_pos ~= nil then return root_pos end
+    return nil
+end
+
+ 
+local function shiza_gore_play_particle(name, pos)
+    local ok, err = pcall(function()
+        local particle = particles_object(name)
+        if particle == nil then error("частица не найдена") end
+        particle:play_at_pos(pos)
+    end)
+    if not ok and not shiza_gore_particle_warning_printed then
+        shiza_gore_particle_warning_printed = true
+        printf("[GORE_DIAG] ошибка запуска частицы %s: %s", tostring(name), tostring(err))
+    end
+    return ok
+end
+
+ 
+local function shiza_gore_on_hit(obj, bone_index)
+    local head_id = shiza_gore_get_bone_id(obj, SHIZA_GORE_HEAD_BONE)
+    if head_id == nil then
+        if not shiza_gore_api_warning_printed then
+            shiza_gore_api_warning_printed = true
+            printf("[GORE_DIAG] движок не отдал индекс кости %s; эффекты попадания в голову пока отключены", SHIZA_GORE_HEAD_BONE)
+        end
+        return false, nil
+    end
+
+    local is_head = tonumber(bone_index) == head_id
+    if not is_head then return false, head_id end
+
+    local pos = shiza_gore_get_head_position(obj)
+    if pos == nil then
+        printf("[GORE_DIAG] не удалось получить позицию головы id=%s", tostring(obj:id()))
+        return true, head_id
+    end
+
+    shiza_gore_play_particle("hit_fx\\group_items\\hit_blood_puff_head", pos)
+    local drops = math.random(0, 1)
+    shiza_gore_play_particle("hit_fx\\group_items\\hit_blood_drops_headshoot_0" .. tostring(drops), pos)
+    return true, head_id
+end
+
+ 
+local function shiza_gore_hide_head(obj)
+    local ok, err = pcall(function()
+        obj:set_bone_visible(SHIZA_GORE_HEAD_BONE, 0)
+    end)
+    if ok then
+        printf("[GORE_DIAG] вызов скрытия кости головы выполнен id=%s; визуальный результат нужно проверить в игре", tostring(obj:id()))
+    else
+        printf("[GORE_DIAG] движок не поддержал скрытие кости %s: %s", SHIZA_GORE_HEAD_BONE, tostring(err))
+    end
+end
+
+ 
+class "motivator_binder" (object_binder)
+
+function motivator_binder:__init (obj) super(obj)
+	self.loaded = false
+	self.last_update = 0
+	 
+
+    self.first_update = false
+	self.treasure_processed = false
+end
+
+function motivator_binder:extrapolate_callback(cur_pt)
+	if self.st.active_section then
+		xr_logic.issue_event(self.object, self.st[self.st.active_scheme], "extrapolate_callback")
+		self.st.move_mgr:extrapolate_callback(self.object)
+	end
+
+	if patrol(self.object:patrol()):flags(cur_pt):get() == 0 then
+		return true
+	end
+	return false
+end
+
+function motivator_binder:reinit()
+	self.grm_active_ragdoll = nil
+    object_binder.reinit(self)
+     
+     
+
+     
+     
+
+    local char_ini = self.object:spawn_ini() or ini_file("scripts\\dummy.ltx")
+
+ 
+ 
+ 
+    db.storage[self.object:id()] = {  followers = {} }
+    self.st = db.storage[self.object:id()]
+
+     
+     
+	self.st.state_mgr = state_mgr.bind_manager(self.object)
+
+	self.st.move_mgr = move_mgr.move_mgr(self.object)
+	self.st.move_mgr:initialize()
+
+	 
+	 
+end
+ 
+function motivator_binder:net_spawn(sobject)
+	printf("motivator_binder:net_spawn(): self.object:name()='%s'", self.object:name())
+	 
+	if not object_binder.net_spawn(self, sobject) then
+		return false
+	end
+
+ 
+ 
+ 
+ 
+
+	db.add_obj(self.object)
+
+	 
+	self.object:set_patrol_extrapolate_callback(motivator_binder.extrapolate_callback, self)
+	self.object:set_callback(callback.hit, motivator_binder.hit_callback, self)
+	self.object:set_callback(callback.death, motivator_binder.death_callback, self)
+	self.object:set_callback(callback.use_object, motivator_binder.use_callback, self)
+	 
+
+	 
+
+     
+	if self.loaded == false then
+		local char_ini = self.object:spawn_ini() or ini_file("scripts\\dummy.ltx")
+		xr_info.loadInfo(self.object, char_ini)
+	end
+
+	if not self.object:alive() then
+		return true
+	end
+
+	 
+ 
+		local manager = self.object:motivation_action_manager()
+		manager:remove_evaluator	(stalker_ids.property_anomaly)
+		manager:add_evaluator		(stalker_ids.property_anomaly, property_evaluator_const(false))
+ 
+	
+     
+     
+    xr_sound.load_sound(self.object)
+     
+
+	xr_gulag.setup_gulag_and_logic_on_spawn( self.object, self.st, sobject, modules.stype_stalker, self.loaded )
+
+	return true
+end
+
+function motivator_binder:net_destroy()
+	self.grm_active_ragdoll = nil
+	 
+
+	local st = db.storage[self.object:id()]
+	if st.active_scheme then
+		xr_logic.issue_event(self.object, st[st.active_scheme], "net_destroy", self.object)
+	end
+
+	db.del_obj(self.object)
+
+	db.storage[self.object:id()] = nil
+
+	self:clear_callbacks()
+	self.object:set_callback(callback.use_object, nil)
+
+	object_binder.net_destroy(self)
+end
+
+function motivator_binder:clear_callbacks()
+	self.object:set_patrol_extrapolate_callback(nil)
+	self.object:set_callback(callback.hit, nil)
+	self.object:set_callback(callback.death, nil)
+end
+
+function motivator_binder:hit_callback(obj, amount, local_direction, who, bone_index)
+	-- Попадания по трупам не передаются в обработчики живого НПС.
+	if not self.object:alive() then
+		local now = time_global()
+		if not self.grm_corpse_log_time or now < self.grm_corpse_log_time or now - self.grm_corpse_log_time >= 500 then
+			self.grm_corpse_log_time = now
+			pcall(function() printf("[GRM_CORPSE] hit bone=%s", tostring(bone_index)) end)
+		end
+		local ok, err = pcall(function() grm_gore_test.corpse_hit(self, who, bone_index) end)
+		if not ok then pcall(function() printf("[GRM_CORPSE] error %s", tostring(err)) end) end
+		return
+	end
+	pcall(function() grm_gore_test.hit(self, amount, who, bone_index) end)
+	 
+	 
+	if self.st.active_section then
+		xr_logic.issue_event(self.object, self.st[self.st.active_scheme], "hit_callback", obj, amount, local_direction, who, bone_index)
+	end
+	if self.st.combat_ignore then
+		xr_logic.issue_event(self.object, self.st.combat_ignore, "hit_callback", obj, amount, local_direction, who, bone_index)
+	end
+	if self.st.combat then
+		xr_logic.issue_event(self.object, self.st.combat, "hit_callback", obj, amount, local_direction, who, bone_index)
+	end
+	if self.st.hit then
+		xr_logic.issue_event(self.object, self.st.hit, "hit_callback", obj, amount, local_direction, who, bone_index)
+	end
+	if amount > 0 then
+		printf("HIT_CALLBACK: %s amount=%s bone=%s", obj:name(), amount, tostring(bone_index))
+		local is_head, head_id = shiza_gore_on_hit(self.object, bone_index)
+		printf("[GORE_DIAG] hit id=%s bone=%s head_id=%s is_head=%s amount=%s", tostring(self.object:id()), tostring(bone_index), tostring(head_id), tostring(is_head), tostring(amount))
+		if self.st then
+			if is_head then
+				local attacker_id = nil
+				if who then
+					local who_ok, value = pcall(function() return who:id() end)
+					if who_ok then attacker_id = tonumber(value) end
+				end
+				self.st.shiza_gore_last_head_hit = { time = time_global(), who_id = attacker_id }
+			else
+				self.st.shiza_gore_last_head_hit = nil
+			end
+		end
+		-- Дополнительные визуальные реакции на попадание игрока.
+		pcall(function() grm_painter_combat.on_hit(self, amount, who, bone_index) end)
+		sr_territory.issue_event(self.object, "hit_callback", obj, amount, local_direction, who, bone_index)
+		xr_wounded.hit_callback(self.object:id())
+	end
+end
+
+function motivator_binder:death_callback(victim, who)
+	pcall(function() grm_gore_test.death(self, who) end)
+	pcall(function() grm_active_ragdoll.on_death(self, who, self.st and self.st.shiza_gore_last_head_hit, SHIZA_GORE_DEATH_WINDOW) end)
+	-- Отдельная реакция на смертельное попадание; суицид не изменяется.
+	pcall(function() grm_painter_combat.on_death(self, who) end)
+	 
+	local death_who_id = nil
+	if who then
+		local who_ok, value = pcall(function() return who:id() end)
+		if who_ok then death_who_id = tonumber(value) end
+	end
+	printf("[GORE_DIAG] death id=%s killer=%s", tostring(self.object:id()), tostring(death_who_id))
+	local last_head_hit = self.st and self.st.shiza_gore_last_head_hit
+	if last_head_hit then
+		local killer_id = nil
+		if who then
+			local who_ok, value = pcall(function() return who:id() end)
+			if who_ok then killer_id = tonumber(value) end
+		end
+		if last_head_hit.who_id ~= nil and killer_id == last_head_hit.who_id and time_global() - last_head_hit.time <= SHIZA_GORE_DEATH_WINDOW then
+			shiza_gore_hide_head(self.object)
+		else
+			printf("[GORE_DIAG] смерть не совпала с недавним попаданием в голову id=%s", tostring(self.object:id()))
+		end
+		self.st.shiza_gore_last_head_hit = nil
+	end
+
+	 
+	local killed_by_actor = false
+	if who and db.actor then
+		local who_ok, who_id = pcall(function() return who:id() end)
+		local actor_ok, actor_id = pcall(function() return db.actor:id() end)
+		killed_by_actor = who_ok and actor_ok and who_id == actor_id
+	end
+	if killed_by_actor then
+		shiza_kill_stress.on_human_kill()
+		xr_statistic.addKillCount(self.object)
+	end
+	
+	if self.st.death then
+		xr_logic.issue_event(self.object, self.st.death, "death_callback", victim, who)
+	end
+	if self.st.active_section then
+		xr_logic.issue_event(self.object, self.st[self.st.active_scheme], "death_callback", victim, who)
+	end
+	sr_territory.issue_event(self.object, "death_callback", victim, who)
+
+	sr_light.check_light(self.object)
+
+	smart_terrain.on_death( self.object:id() )
+	
+	death_manager.drop_manager(self.object):create_release_item()
+	if killed_by_actor then pcall(function() shiza_skeleton_illusion.on_actor_kill(self.object) end) end
+
+	self:clear_callbacks()
+	-- Для трупа оставляем только обработчик попаданий; при удалении он отключается.
+	self.object:set_callback(callback.hit, motivator_binder.hit_callback, self)
+end
+
+function motivator_binder:use_callback(obj, who)
+	 
+	local use_by_actor = false
+	if who and db.actor then
+		local who_ok, who_id = pcall(function() return who:id() end)
+		local actor_ok, actor_id = pcall(function() return db.actor:id() end)
+		local slot_ok, slot = pcall(function() return who:active_slot() end)
+		use_by_actor = who_ok and actor_ok and slot_ok and who_id == actor_id and slot == 0
+	end
+	if not self.object:alive() and use_by_actor then
+		if self.use_flag == nil and self.object:section() ~= "m_trader" then
+			self.use_flag = true
+			shiza_reznya.piter_moment(self.object)
+			self.object:set_nonscript_usable(false)
+		end
+		return
+	end
+	 
+
+	if self.object:alive() then
+		xr_use.notify_on_use(obj, who)
+		if self.st.active_section then
+			xr_logic.issue_event(self.object, self.st[self.st.active_scheme], "use_callback", obj, who)
+		end
+	else
+		if self.treasure_processed == false then
+			treasure_manager:get_treasure_manager():use(self.object)
+			self.treasure_processed = true
+		end
+	end
+end
+
+function motivator_binder:update(delta)
+	object_binder.update(self, delta)
+	pcall(function() grm_active_ragdoll.update(self) end)
+	pcall(function() grm_gore_test.update(self) end)
+	-- Временные эффекты ранения не записываются в сохранения.
+	pcall(function() grm_painter_combat.update(self) end)
+
+     
+    if not self.rot_registered and not self.object:alive() then
+        self.rot_registered = sl_rotting.observe_npc(self.object)
+    end
+
+    if self.first_update == false then
+        if self.object:alive() == false then
+			death_manager.drop_manager(self.object):create_release_item()
+        end        
+        self.first_update = true
+    end
+
+    if time_global() - self.last_update > 1000 then
+       sr_light.check_light(self.object)
+       self.last_update = time_global()
+    end
+
+	 
+	if self.st.state_mgr then
+		if self.object:alive() then
+			self.st.state_mgr:update()
+			 
+			if self.st.state_mgr.combat == false and
+			   self.st.state_mgr.alife == false
+			then
+				trade_manager.update(self.object)
+			end			
+		else
+			self.st.state_mgr = nil
+		end
+	end
+	
+	 
+	if self.object:alive() then
+		xr_sound.update(self.object)
+	end
+
+	if self.object:alive() then
+		if self.object:is_talk_enabled() then
+			self.object:set_tip_text("character_use")
+		else
+			self.object:set_tip_text("")
+		end
+	else
+		 
+		if db.actor and db.actor:active_slot() == 0 then
+			if self.use_flag then
+				self.object:set_tip_text("")
+			else
+				self.object:set_tip_text("st_raschlenit")
+			end
+		 
+		else
+			self.object:set_tip_text_default()
+		end
+	end
+
+
+	-- NPC debug information disabled for the performance test.
+
+	 
+ 
+
+
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+end
+
+function motivator_binder:reload(section)
+	 
+	object_binder.reload(self, section)
+	 
+	 
+	 
+end
+
+function motivator_binder:net_save_relevant()
+	 
+	return true
+end
+
+function motivator_binder:save(packet)
+	printf("motivator_binder:save(): self.object:name()='%s'", self.object:name())
+	object_binder.save(self, packet)
+
+	packet:w_bool(self.treasure_processed)
+
+	xr_logic.save_obj(self.object, packet)
+	dialog_manager.save(self.object, packet)
+	trade_manager.save(self.object, packet)
+end
+
+function motivator_binder:load(reader)
+	self.loaded = true
+
+	printf("motivator_binder:load(): self.object:name()='%s'", self.object:name())
+	object_binder.load(self, reader)
+	printf("motivator_binder:object_binder.load(): self.object:name()='%s'", self.object:name())
+
+	if reader:r_eof() then
+		abort("SAVE FILE IS CORRUPT")
+	end
+
+
+	self.treasure_processed = reader:r_bool()
+
+	xr_logic.load_obj(self.object, reader)
+
+	self.npc_script_version = alife():object(self.object:id()).script_version
+	dialog_manager.load(self.object, reader, self.npc_script_version)
+	trade_manager.load(self.object, reader)
+end
+
+function motivator_binder:hear_callback(self, who, sound_type, sound_position, sound_power)
+	if who and self then
+		local who_ok, who_id = pcall(function() return who:id() end)
+		local object_ok, object_id = pcall(function() return self:id() end)
+		if who_ok and object_ok and who_id == object_id then return end
+	end
+	local type = "NIL"
+	if bit_and(sound_type, snd_type.weapon) == snd_type.weapon then
+		type = "WPN"
+		if bit_and(sound_type, snd_type.weapon_shoot) == snd_type.weapon_shoot then
+			type = "WPN_shoot"
+		elseif bit_and(sound_type, snd_type.weapon_empty) == snd_type.weapon_empty then
+			type = "WPN_empty"
+		elseif bit_and(sound_type, snd_type.weapon_bullet_hit) == snd_type.weapon_bullet_hit then
+			type = "WPN_hit"
+		elseif bit_and(sound_type, snd_type.weapon_reload) == snd_type.weapon_reload then
+			type = "WPN_reload"
+		end
+	elseif bit_and(sound_type, snd_type.item) == snd_type.item then
+		type = "ITM"
+		if bit_and(sound_type, snd_type.item_pick_up) == snd_type.item_pick_up then
+			type = "ITM_pckup"
+		elseif bit_and(sound_type, snd_type.item_drop) == snd_type.item_drop then
+			type = "ITM_drop"
+		elseif bit_and(sound_type, snd_type.item_hide) == snd_type.item_hide then
+			type = "ITM_hide"
+		elseif bit_and(sound_type, snd_type.item_take) == snd_type.item_take then
+			type = "ITM_take"
+		elseif bit_and(sound_type, snd_type.item_use) == snd_type.item_use then
+			type = "ITM_use"
+		end
+	elseif bit_and(sound_type, snd_type.monster) == snd_type.monster then
+		type = "MST"
+		if bit_and(sound_type, snd_type.monster_die) == snd_type.monster_die then
+			type = "MST_die"
+		elseif bit_and(sound_type, snd_type.monster_injure) == snd_type.monster_injure then
+			type = "MST_damage"
+		elseif bit_and(sound_type, snd_type.monster_step) == snd_type.monster_step then
+			type = "MST_step"
+		elseif bit_and(sound_type, snd_type.monster_talk) == snd_type.monster_talk then
+			type = "MST_talk"
+		elseif bit_and(sound_type, snd_type.monster_attack) == snd_type.monster_attack then
+			type = "MST_attack"
+		elseif bit_and(sound_type, snd_type.monster_eat) == snd_type.monster_eat then
+			type = "MST_eat"
+		end
+	end
+	if type ~= "NIL" then
+		printf("SND *%s* dist: %d [%f], %s -> %s", type, self:position():distance_to(who:position()), sound_power, who:name(), self:name())
+	end
+end
+
+function AddToMotivator(npc)
+	if alife() then
+		npc:bind_object(this.motivator_binder(npc))
+	end
+end
+
+ 
+function addCommonPrecondition(action)
+	 
+	action:add_precondition (world_property(xr_evaluators_id.stohe_meet_base + 1,false))
+	action:add_precondition (world_property(xr_evaluators_id.sidor_wounded_base + 0,  false))
+	action:add_precondition (world_property(xr_evaluators_id.chugai_heli_hunter_base, false))
+	action:add_precondition (world_property(xr_evaluators_id.abuse_base, false))
+	action:add_precondition (world_property(xr_evaluators_id.suicide_base, false))
+end

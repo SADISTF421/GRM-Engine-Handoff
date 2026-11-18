@@ -333,3 +333,8 @@ function update(binder)
         end
     end
 end
+
+-- ”дал€ем только скал€рный ID из runtime-таблицы sidecar.
+function forget(id)
+    pcall(function() sl_sidecar_manager.forget(id) end)
+end

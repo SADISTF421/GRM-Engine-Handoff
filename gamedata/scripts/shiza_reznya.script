@@ -104,7 +104,7 @@ local function spawn_body(obj)
 	level.add_pp_effector(FADE_EFFECT, 1488, false)
 	obj:iterate_inventory(need_drop, obj)
     sl_rotting.forget(obj)
-    pcall(function() sl_sidecar_manager.forget(obj:id()) end)
+    pcall(function() grm_gore_test.forget(obj:id()) end)
 	alife():release(alife():object(obj:id()), true)
 	
 	for k, v in pairs(spawn_items) do
@@ -240,7 +240,7 @@ function eat_moment(obj)
 			db.actor:eat(db.actor:object(SECTION_OBJ_TO_EAT))
 			
 			-- Убираем тело
-			pcall(function() sl_sidecar_manager.forget(obj:id()) end)
+			pcall(function() grm_gore_test.forget(obj:id()) end)
 			alife():release(alife():object(obj:id()), true)
 		end
 	)

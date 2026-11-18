@@ -73,6 +73,33 @@ function save_gore_data(save_name)
     if not ok then pcall(function() f:close() end);problem(result);return false,'write failed' end
     return true,#ids
 end
+-- Это данные перед записью, а не подтверждённое сохранение и не привязка к слоту.
+-- Идентификаторы проверяются через реестр ALife; при ошибке поиска не делаем вывод об удалении.
+function prune_deleted()
+    local ok, simulator=pcall(function() return alife() end)
+    if not ok or not simulator then problem('ALife unavailable');return false end
+    local stale={}
+    for id in pairs(records) do
+        local found,object=pcall(function() return simulator:object(id) end)
+        if not found then problem('ALife lookup failed');return false end
+        if not object then stale[#stale+1]=id end
+    end
+    for _,id in ipairs(stale) do records[id]=nil end
+    return true,#stale
+end
+-- Вызывается в actor_binder:save ДО записи файла двигателем.
+-- Имя текущего сейва не известно: файл является неподтверждённым снимком.
+function before_save()
+    local pruned=prune_deleted()
+    if not pruned then return false,'lookup unavailable' end
+    if type(io)~='table' or type(io.open)~='function' then
+        reset()
+        problem('io.open unavailable; runtime records cleared')
+        return false,'io unavailable'
+    end
+    if not current_level then return false,'no runtime records' end
+    return save_gore_data('grm_runtime_unconfirmed')
+end
 -- Ошибка или отсутствие файла дают пустую таблицу; кости не меняются.
 function load_gore_data(save_name)
     reset()

@@ -144,7 +144,7 @@ local function convert(id,r,obj,server)
         end
     end
     if r.stage==3 then
-        pcall(function() sl_sidecar_manager.forget(id) end)
+        pcall(function() grm_gore_test.forget(id) end)
         alife():release(server,true);records[id]=nil;save_record(id,nil);return true
     end
     local list=r.stage==1 and bodies or bones
@@ -167,7 +167,7 @@ local function convert(id,r,obj,server)
     end
     local newname=new:name();local newsection=new:section_name()
     local next_stage=r.stage+1
-    pcall(function() sl_sidecar_manager.forget(id) end)
+    pcall(function() grm_gore_test.forget(id) end)
     alife():release(server,true)
     records[id]=nil;locks[id]=nil;save_record(id,nil)
     records[new.id]={stage=next_stage,left=next_stage==2 and settings.second or settings.third,name=newname,section=newsection}

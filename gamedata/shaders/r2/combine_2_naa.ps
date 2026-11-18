@@ -2,6 +2,7 @@
 #include "mblur.h"
 #include "grm_mood_grade.h"
 #include "grm_foreground_glitch.h"
+#include "grm_near_focus_test.h"
 
 struct 	v2p
 {
@@ -138,6 +139,7 @@ half4 	main		( v2p I )	: COLOR
 
 	float3 grm_pos = tex2D(s_position, I.tc0).xyz;
 	img.rgb 	= mblur		(center,grm_pos,img.rgb);
+	img.rgb = grm_near_focus(img.rgb, I.tc0.xy, center, grm_pos);
 	img.rgb = grm_ssfx_sharp(img.rgb, I.tc0.xy, center, grm_pos);
 	img.rgb = grm_puddle_reflection(img.rgb, I.tc0.xy, grm_pos, tex2D(s_normal, I.tc0).xyz);
 

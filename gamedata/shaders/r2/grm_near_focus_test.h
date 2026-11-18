@@ -4,7 +4,8 @@
 // Нативную сцену и соседние глубины используем без изменения FOV.
 half3 grm_near_focus(half3 scene, float2 uv, float2 image_uv, float3 position_eye)
 {
-    float focus = tex2D(s_position, float2(0.5f, 0.5f)).z;
+    float2 focus_uv = uv * 0.0001f + float2(0.49995f, 0.49995f);
+    float focus = tex2D(s_position, focus_uv).z;
     float activation = smoothstep(0.15f, 0.30f, focus) * (1.0f - smoothstep(0.65f, 1.25f, focus));
     float far_mask = smoothstep(focus + 0.30f, focus + 1.60f, position_eye.z);
     float2 pixel = max(float2(abs(ddx(uv.x)), abs(ddy(uv.y))), float2(0.000001f, 0.000001f));

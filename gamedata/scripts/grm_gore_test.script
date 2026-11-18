@@ -36,6 +36,7 @@ local function actor_weapon(who)
         local item = db.actor:active_item()
         if not item then return nil, "NO ACTIVE ITEM" end
         local name = item:section()
+        if name == "wpn_knife" then return nil, name end
         if shotguns[name] then return "shotgun", name end
         if rifles[name] then return "rifle", name end
         local ini = system_ini()
@@ -343,4 +344,15 @@ end
 -- ”дал€ем только скал€рный ID из runtime-таблицы sidecar.
 function forget(id)
     pcall(function() sl_sidecar_manager.forget(id) end)
+end
+
+-- ќтмен€ем только ожидающий запуск эффекта и временную отметку удара.
+-- ∆ивые частицы и состо€ние скрытой головы не уничтожаем.
+function prepare_harvest(binder)
+    if not binder or not binder.object then return end
+    local ok,id = pcall(function() return binder.object:id() end)
+    if ok then forget(id) end
+    binder.grm_gore_pending = nil
+    binder.grm_gore_test = nil
+    binder.grm_gore_aim = nil
 end

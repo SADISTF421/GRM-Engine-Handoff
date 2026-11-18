@@ -248,7 +248,13 @@ function motivator_binder:hit_callback(obj, amount, local_direction, who, bone_i
 		xr_logic.issue_event(self.object, self.st.hit, "hit_callback", obj, amount, local_direction, who, bone_index)
 	end
 	if amount > 0 then
-		local is_head, head_id = shiza_gore_on_hit(self.object, bone_index)
+		local knife_ok, actor_knife = pcall(function()
+			if not who or not db or not db.actor or who:id() ~= db.actor:id() then return false end
+			local item = db.actor:active_item()
+			return item and item:section() == "wpn_knife"
+		end)
+		local is_head, head_id = false, nil
+		if not (knife_ok and actor_knife) then is_head, head_id = shiza_gore_on_hit(self.object, bone_index) end
 		if self.st then
 			if is_head then
 				local attacker_id = nil
@@ -335,6 +341,7 @@ function motivator_binder:use_callback(obj, who)
 	if not self.object:alive() and use_by_actor then
 		if self.use_flag == nil and self.object:section() ~= "m_trader" then
 			self.use_flag = true
+			pcall(function() grm_gore_test.prepare_harvest(self) end)
 			shiza_reznya.piter_moment(self.object)
 			self.object:set_nonscript_usable(false)
 		end
